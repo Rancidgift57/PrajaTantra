@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── PrajaTantra Design Tokens ────────────────────────────────────────────
+   Palette drawn from the Indian tricolour + political tradition:
+   Saffron courage, Ashoka-wheel teal, parchment paper, deep ink
+   ──────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+
+  /* Core palette */
+  --pt-saffron:    #FF6B00;   /* BJP-orange energy, calls to action */
+  --pt-saffron-lt: #FF9130;   /* hover / highlight */
+  --pt-wheel:      #0B4EA2;   /* Ashoka wheel blue – trust / links */
+  --pt-wheel-lt:   #1B6FE6;   /* lighter blue for glows */
+  --pt-green:      #138A36;   /* Congress green / nature / economy */
+  --pt-green-lt:   #1DB54B;
+  --pt-white:      #F4F0E6;   /* khadi parchment – primary text */
+  --pt-muted:      #8A8070;   /* secondary text on dark panels */
+  --pt-red:        #C0292A;   /* scandal / corruption / danger */
+  --pt-red-lt:     #E04445;
+  --pt-gold:       #C9962D;   /* treasury gold */
+
+  /* Surfaces */
+  --pt-ink:        #0C0F14;   /* near-black base */
+  --pt-panel:      #131820;   /* elevated card surface */
+  --pt-panel-hi:   #1A2130;   /* hovered / selected */
+  --pt-line:       #2A3040;   /* border lines */
+
+  background: var(--pt-ink);
+  color: var(--pt-white);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: 'Segoe UI', Arial, Helvetica, sans-serif;
+  /* Subtle lotus-petal radial bg */
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 0%, rgba(255, 107, 0, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(11, 78, 162, 0.08) 0%, transparent 60%),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(0deg,   rgba(255,255,255,0.025) 1px, transparent 1px),
+    var(--pt-ink);
+  background-size: auto, auto, 40px 40px, 40px 40px;
+}
+
+button, input, textarea, select { font: inherit; }
+
+/* ─── Ashoka Wheel spinner used in graph grid ─────────────────────────── */
+.chakra-grid {
+  background-image: radial-gradient(circle, rgba(11,78,162,0.18) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ─── Scrollbar – saffron on dark ─────────────────────────────────────── */
+.ledger-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pt-saffron) var(--pt-panel);
+}
+.ledger-scroll::-webkit-scrollbar       { width: 6px; }
+.ledger-scroll::-webkit-scrollbar-thumb { background: var(--pt-saffron); border-radius: 3px; }
+
+/* ─── Tricolour top-bar accent ────────────────────────────────────────── */
+.tricolour-bar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--pt-saffron) 33.3%, var(--pt-white) 33.3% 66.6%, var(--pt-green) 66.6%);
+}
+
+/* ─── "Ticker tape" news banner ───────────────────────────────────────── */
+/* Animation runs on .ticker-text which is remounted via React key=,      */
+/* so React never diffs the text node mid-animation.                      */
+@keyframes ticker {
+  0%   { transform: translateX(100vw); }
+  100% { transform: translateX(-100%); }
+}
+.ticker-text {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  animation: ticker 32s linear infinite;
+}
+
+/* ─── Flash pulse on urgent alerts ────────────────────────────────────── */
+@keyframes urgent-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
+.urgent { animation: urgent-pulse 2s ease-in-out infinite; }
+
+/* ─── Corruption ring glow ─────────────────────────────────────────────── */
+.scam-ring { box-shadow: 0 0 0 2px var(--pt-red), 0 0 14px rgba(192,41,42,0.5); }
+
+/* ─── Utility classes matching the design token names ─────────────────── */
+.bg-pt-ink       { background: var(--pt-ink); }
+.bg-pt-panel     { background: var(--pt-panel); }
+.bg-pt-panel-hi  { background: var(--pt-panel-hi); }
+.bg-pt-saffron   { background: var(--pt-saffron); }
+.bg-pt-wheel     { background: var(--pt-wheel); }
+.bg-pt-green     { background: var(--pt-green); }
+.bg-pt-red       { background: var(--pt-red); }
+.bg-pt-gold      { background: var(--pt-gold); }
+
+.text-pt-white   { color: var(--pt-white); }
+.text-pt-muted   { color: var(--pt-muted); }
+.text-pt-saffron { color: var(--pt-saffron); }
+.text-pt-wheel   { color: var(--pt-wheel-lt); }
+.text-pt-green   { color: var(--pt-green-lt); }
+.text-pt-red     { color: var(--pt-red-lt); }
+.text-pt-gold    { color: var(--pt-gold); }
+
+.border-pt-line    { border-color: var(--pt-line); }
+.border-pt-saffron { border-color: var(--pt-saffron); }
+.border-pt-wheel   { border-color: var(--pt-wheel); }
+.border-pt-green   { border-color: var(--pt-green); }
+.border-pt-red     { border-color: var(--pt-red); }
+.border-pt-gold    { border-color: var(--pt-gold); }
