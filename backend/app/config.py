@@ -33,7 +33,7 @@ class Settings:
     # app/config.py — new frontend_origins property
     @property
     def frontend_origins(self) -> list[str]:
-        explicit = [o.strip() for o in self.frontend_origins_raw.split(",") if o.strip()]
+        explicit = [o.strip() for o in self.frontend_origins.split(",") if o.strip()]
         defaults = [self.frontend_origin, "http://localhost:3000", "http://127.0.0.1:3000"]
         seen: set[str] = set()
         origins: list[str] = []
