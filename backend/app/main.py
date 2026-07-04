@@ -31,7 +31,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.frontend_origins,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    # Belt-and-suspenders: matches http(s)://localhost:<any port> and
+    # 127.0.0.1 for local dev, PLUS any *.vercel.app subdomain so Vercel's
+    # preview-deployment URLs (a new one per branch/PR) work without having
+    # to add each one to FRONTEND_ORIGINS by hand.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://[a-zA-Z0-9-]+\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
