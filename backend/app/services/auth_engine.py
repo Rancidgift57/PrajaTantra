@@ -108,22 +108,22 @@ class _StoredPlayer:
 
 _SEED_RIVALS: list[_StoredPlayer] = [
     _StoredPlayer(
-        id="seed-brazil", username="Brazil", email="bot@prajatantra.local",
+        id="seed-brazil", username="Brazil", email="bot-brazil@prajatantra.local",
         password_hash="", city_id="BOT-BRA", city_name="Brasília Sangh",
         ideology="Industrialist", owned_percent=0.7, gold=64_000, max_troops=21_000,
     ),
     _StoredPlayer(
-        id="seed-russia", username="Russia", email="bot@prajatantra.local",
+        id="seed-russia", username="Russia", email="bot-russia@prajatantra.local",
         password_hash="", city_id="BOT-RUS", city_name="Moskva Rajya",
         ideology="Nationalist", owned_percent=0.7, gold=64_000, max_troops=20_200,
     ),
     _StoredPlayer(
-        id="seed-siberia", username="Siberia", email="bot@prajatantra.local",
+        id="seed-siberia", username="Siberia", email="bot-siberia@prajatantra.local",
         password_hash="", city_id="BOT-SIB", city_name="Siberia Pradesh",
         ideology="Technocrat", owned_percent=0.6, gold=64_000, max_troops=19_800,
     ),
     _StoredPlayer(
-        id="seed-australia", username="Australia", email="bot@prajatantra.local",
+        id="seed-australia", username="Australia", email="bot-australia@prajatantra.local",
         password_hash="", city_id="BOT-AUS", city_name="Canberra Lok",
         ideology="Green", owned_percent=0.6, gold=91_000, max_troops=19_600,
     ),
@@ -163,18 +163,24 @@ class AuthEngine:
             return
         async with db.pool().acquire() as conn:
             for rival in _SEED_RIVALS:
-                await conn.execute(
-                    """
-                    INSERT INTO players (id, username, email, password_hash, city_id,
-                                          city_name, ideology, political_mmr, owned_percent,
-                                          gold, max_troops)
-                    VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    _seed_uuid(rival.id), rival.username, rival.email, rival.password_hash,
-                    rival.city_id, rival.city_name, rival.ideology, rival.political_mmr,
-                    rival.owned_percent, rival.gold, rival.max_troops,
-                )
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO players (id, username, email, password_hash, city_id,
+                                              city_name, ideology, political_mmr, owned_percent,
+                                              gold, max_troops)
+                        VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        _seed_uuid(rival.id), rival.username, rival.email, rival.password_hash,
+                        rival.city_id, rival.city_name, rival.ideology, rival.political_mmr,
+                        rival.owned_percent, rival.gold, rival.max_troops,
+                    )
+                except Exception:
+                    # Seeding AI rivals is cosmetic (leaderboard filler) — never let
+                    # a stale/duplicate row here take down the whole API on boot.
+                    # Real player register/login is unaffected either way.
+                    continue
 
     # ── Registration / login ───────────────────────────────────────────────
 
