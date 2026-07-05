@@ -223,7 +223,7 @@ class AuthEngine:
             async with db.pool().acquire() as conn:
                 await conn.execute(
                     "UPDATE players SET gold = $2, max_troops = $3, owned_percent = $4 WHERE id = $1::uuid",
-                    _seed_uuid(player_id), gold, max_troops, owned_percent,
+                    player_id, gold, max_troops, owned_percent,
                 )
             return
         stored = self._players_by_id.get(player_id)
@@ -285,7 +285,7 @@ class AuthEngine:
             raise PermissionError("Session expired or invalid. Please log in again.")
         async with db.pool().acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT {_PLAYER_COLUMNS} FROM players WHERE id = $1::uuid", _seed_uuid(player_id),
+                f"SELECT {_PLAYER_COLUMNS} FROM players WHERE id = $1::uuid", player_id,
             )
         if not row:
             raise PermissionError("Session expired or invalid. Please log in again.")
@@ -298,7 +298,7 @@ class AuthEngine:
         async with db.pool().acquire() as conn:
             row = await conn.fetchrow(
                 "UPDATE players SET city_name = $2 WHERE id = $1::uuid RETURNING city_id, city_name",
-                _seed_uuid(player_id), payload.new_name,
+                player_id, payload.new_name,
             )
         if not row:
             raise PermissionError("Session expired or invalid. Please log in again.")
