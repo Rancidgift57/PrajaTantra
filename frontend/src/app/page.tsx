@@ -1310,6 +1310,7 @@ function ElectionPanel({
       {/* ── Seat map (hemicycle chart) ──────────────────────────── */}
       {simulation && (simulation.seats?.length ?? 0) > 0 && (
         <SeatMap
+          key={`${simulation.total_seats}-${simulation.incumbent_seats}-${simulation.opposition_seats}-${simulation.margin}`}
           seats={simulation.seats}
           totalSeats={simulation.total_seats ?? 101}
           incumbentName={simulation.incumbent_name ?? "Sattadheen Dal"}
@@ -1727,10 +1728,12 @@ export default function Home() {
 
   // Restore session on mount
   useEffect(() => {
+    let savedToken: string | null = null;
     try {
       const raw = window.localStorage.getItem(SESSION_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as AuthResponse;
+        savedToken = parsed.token;
         setSession(parsed);
         // Validate token is still accepted by the backend; if not, clear it.
         api.me(parsed.token).catch(() => {
@@ -1738,13 +1741,26 @@ export default function Home() {
           setSession(null);
         });
       }
-      const savedMatch = window.localStorage.getItem(MATCH_KEY);
-      if (savedMatch) setMatchId(savedMatch);
     } catch {
       window.localStorage.removeItem(SESSION_KEY);
-    } finally {
-      setBootChecked(true);
     }
+
+    // Matches live in server memory only — a backend restart/redeploy wipes
+    // them. If the saved match_id no longer exists server-side, drop back
+    // to the lobby instead of endlessly retrying a WebSocket that will
+    // always be rejected pre-handshake (surfaces as a confusing 403).
+    const savedMatch = window.localStorage.getItem(MATCH_KEY);
+    if (savedMatch && savedToken) {
+      matchApi.getState(savedMatch, savedToken)
+        .then(() => setMatchId(savedMatch))
+        .catch(() => window.localStorage.removeItem(MATCH_KEY));
+    } else if (savedMatch) {
+      // No session to validate against (yet) — keep it optimistically;
+      // it'll be re-checked once login resolves on a future mount.
+      setMatchId(savedMatch);
+    }
+
+    setBootChecked(true);
   }, []);
 
   function handleAuth(response: AuthResponse) {
