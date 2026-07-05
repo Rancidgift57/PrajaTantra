@@ -33,6 +33,7 @@ import MatchLobby from "@/components/MatchLobby";
 import LiveEventFeed from "@/components/LiveEventFeed";
 import SeatMap from "@/components/SeatMap";
 import StreakBadge, { recordMatchResult } from "@/components/StreakBadge";
+import TutorialModal, { TUTORIAL_SEEN_KEY } from "@/components/TutorialModal";
 
 import { matchApi, MatchInfo } from "@/lib/matchApi";
 import { useMatchSocket } from "@/lib/useMatchSocket";
@@ -138,6 +139,19 @@ function Dashboard({
   const [flash, setFlash]             = useState(`🇮🇳  ${player.city_name} — Niyantran Kaksha online.`);
   const [renaming, setRenaming]       = useState(false);
   const [cityNameDraft, setCityNameDraft] = useState(player.city_name);
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // Auto-open the tutorial the very first time a player reaches the
+  // Dashboard; afterwards it only opens when they click "Tutorial".
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem(TUTORIAL_SEEN_KEY)) {
+        setShowTutorial(true);
+      }
+    } catch {
+      // ignore storage errors (private browsing etc.)
+    }
+  }, []);
 
   // Seed the target block picker the first time state arrives.
   useEffect(() => {
@@ -322,10 +336,16 @@ function Dashboard({
       });
       setElection(response);
       setSimulation(simResponse);
+      const incumbentWon = simResponse.winner === (state?.incumbent ?? "Sattadheen Dal");
       const iWon =
-        (role === "Incumbent" && simResponse.winner === (state?.incumbent ?? "Sattadheen Dal")) ||
-        (role === "Opposition" && simResponse.winner === (state?.opposition ?? "Vipaksh Dal"));
+        (role === "Incumbent" && incumbentWon) ||
+        (role === "Opposition" && !incumbentWon);
       recordMatchResult(iWon);
+      // Term counter is fully automatic: the Incumbent's consecutive-term
+      // count grows by 1 every time they retain power, and resets the
+      // moment they lose — this drives voter fatigue in future elections
+      // without the player being able to set it directly.
+      setConsecutiveTerms((prev) => (incumbentWon ? prev + 1 : 0));
       setFlash(
         `🗳️ ${simResponse.winner} jeeta! ${simResponse.incumbent_seats}-${simResponse.opposition_seats}-${simResponse.independent_seats} seats (${simResponse.total_seats} total) · Margin ${simResponse.margin.toLocaleString("en-IN")} votes (${simResponse.margin_pct}%)`
       );
@@ -443,8 +463,16 @@ function Dashboard({
               </span>
               <button
                 type="button"
-                onClick={onLogout}
+                onClick={() => setShowTutorial(true)}
                 className="ml-auto px-2 py-1 text-xs font-bold uppercase"
+                style={{ border: "1px solid var(--pt-saffron)", color: "var(--pt-saffron)" }}
+              >
+                📖 Tutorial
+              </button>
+              <button
+                type="button"
+                onClick={onLogout}
+                className="px-2 py-1 text-xs font-bold uppercase"
                 style={{ border: "1px solid var(--pt-line)", color: "var(--pt-muted)" }}
               >
                 {player.username} · Logout
@@ -786,7 +814,6 @@ function Dashboard({
             role={role}
             onManifesto={setManifesto}
             onSpeech={setSpeech}
-            onConsecutiveTerms={setConsecutiveTerms}
             onGrade={gradeElection}
             onDeclareEmergency={declareEmergency}
           />
@@ -810,6 +837,7 @@ function Dashboard({
           <span style={{ color: "var(--pt-saffron)" }}>जय हिन्द 🇮🇳</span>
         </footer>
       </div>
+      {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
     </main>
   );
 }
@@ -1179,7 +1207,6 @@ function ElectionPanel({
   consecutiveTerms,
   busy, busyEmergency, emergencyActive, role,
   onManifesto, onSpeech,
-  onConsecutiveTerms,
   onGrade,
   onDeclareEmergency,
 }: {
@@ -1194,7 +1221,6 @@ function ElectionPanel({
   role: PlayerRole;
   onManifesto: (v: string) => void;
   onSpeech: (v: string) => void;
-  onConsecutiveTerms: (v: number) => void;
   onGrade: () => void;
   onDeclareEmergency: () => void;
 }) {
@@ -1248,23 +1274,39 @@ function ElectionPanel({
         </div>
       </div>
 
-      {/* ── Only user-controlled input: consecutive terms ─────── */}
+      {/* ── Consecutive Terms in Power — auto-tracked, not user-editable ─ */}
       <div
-        className="mt-3 p-3"
+        className="mt-3 flex items-center justify-between p-3"
         style={{ background: "var(--pt-ink)", border: "1px solid var(--pt-line)" }}
       >
-        <Slider
-          label="Consecutive Terms in Power"
-          hindi="लगातार कार्यकाल (मतदाता थकान)"
-          value={consecutiveTerms}
-          min={0} max={5} step={1}
-          onChange={onConsecutiveTerms}
-          accentColor="var(--pt-wheel-lt)"
-          format={(v) => `${v} term${v !== 1 ? "s" : ""}`}
-        />
-        <div className="mt-2 text-[10px]" style={{ color: "var(--pt-muted)" }}>
-          ⚠️ Satta paksh ke baaki saare scores live city data, manifesto AI-judging, aur anti-incumbency se derive hote hain — aap inhe badal nahi sakte.
+        <div>
+          <div className="text-xs font-black uppercase" style={{ color: "var(--pt-white)" }}>
+            Consecutive Terms in Power
+          </div>
+          <div className="text-[10px]" style={{ color: "var(--pt-muted)" }}>
+            लगातार कार्यकाल (मतदाता थकान) — har jeet ke baad khud-ba-khud badhta hai, haarne par 0 par reset ho jaata hai.
+          </div>
         </div>
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1" aria-hidden="true">
+            {Array.from({ length: Math.min(consecutiveTerms, 5) }).map((_, i) => (
+              <span
+                key={i}
+                className="h-2 w-2 rounded-full"
+                style={{ background: "var(--pt-wheel-lt)" }}
+              />
+            ))}
+          </div>
+          <div
+            className="flex h-10 min-w-[3rem] items-center justify-center px-2 text-lg font-black"
+            style={{ background: "var(--pt-panel-hi)", border: "1px solid var(--pt-wheel-lt)", color: "var(--pt-wheel-lt)" }}
+          >
+            {consecutiveTerms}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 text-[10px]" style={{ color: "var(--pt-muted)" }}>
+        ⚠️ Satta paksh ke baaki saare scores live city data, manifesto AI-judging, aur anti-incumbency se derive hote hain — aap inhe badal nahi sakte.
       </div>
 
       {/* ── Auto-derived strength bars — read-only ─────────────── */}
