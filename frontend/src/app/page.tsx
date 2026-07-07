@@ -43,7 +43,9 @@ import {
   api,
   AuditResponse,
   AuthResponse,
+  CardAvailability,
   CountingRoundResult,
+  CrisisEvent,
   ElectionResponse,
   GraphEdge,
   GraphNode,
@@ -51,8 +53,11 @@ import {
   PlayerProfile,
   PlayerRole,
   PortfolioType,
+  RunElectionResponse,
   ScamResponse,
+  SeatProjection,
   SovereignState,
+  TacticalCard,
   TenRoundSimulationResponse,
 } from "@/lib/api";
 
@@ -140,6 +145,7 @@ function Dashboard({
   const [renaming, setRenaming]       = useState(false);
   const [cityNameDraft, setCityNameDraft] = useState(player.city_name);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [cardCatalog, setCardCatalog] = useState<TacticalCard[]>([]);
 
   // Auto-open the tutorial the very first time a player reaches the
   // Dashboard; afterwards it only opens when they click "Tutorial".
@@ -151,6 +157,11 @@ function Dashboard({
     } catch {
       // ignore storage errors (private browsing etc.)
     }
+  }, []);
+
+  // Tactical Card catalog is static reference data — fetch once.
+  useEffect(() => {
+    api.cardCatalog().then((res) => setCardCatalog(res.cards)).catch(() => setCardCatalog([]));
   }, []);
 
   // Seed the target block picker the first time state arrives.
@@ -279,7 +290,7 @@ function Dashboard({
     }
   }
 
-  async function gradeElection() {
+  async function gradeElection(forceEarly = false) {
     setBusyAction("election");
     try {
       const city = state?.city;
@@ -315,6 +326,7 @@ function Dashboard({
       // an offline heuristic fallback) so its trust_score can nudge seat
       // swing in the counting simulation below — manifesto quality and
       // development delivery should actually move seats, not just votes.
+      // Grading itself has no cooldown — it's just scoring text.
       const response = await api.gradeElection({
         city_stats: city,
         crises: ["pradooshan spike", "shramik asantosh", "swasthya sankat"],
@@ -322,18 +334,31 @@ function Dashboard({
         speech_transcript: speech,
         consecutive_terms: consecutiveTerms,
       });
-      const simResponse = await api.simulateTenRoundCounting({
-        global_trust: city?.public_trust ?? 55,
-        scams_exposed: city?.corruption_leaks ?? 0,
-        consecutive_terms: consecutiveTerms,
-        incumbent_name: state?.incumbent ?? "Sattadheen Dal",
-        opposition_name: state?.opposition ?? "Vipaksh Dal",
-        incumbent_match_score: derivedIncumbentMatch,
-        opposition_match_score: derivedOppositionMatch,
-        total_electorate: 100_000,
-        total_seats: 101,
-        manifesto_trust_score: response.trust_score,
-      });
+
+      // Actually *holding* the election is match-scoped and rate-limited
+      // server-side: once every 3 days by default, or as an explicit snap
+      // election once >= 2.5 days have passed. The server rejects with a
+      // 400 (caught below) if called too soon.
+      const electionResponse = await matchApi.action<RunElectionResponse>(
+        matchId,
+        "elections/simulate-counting",
+        token,
+        {
+          global_trust: city?.public_trust ?? 55,
+          scams_exposed: city?.corruption_leaks ?? 0,
+          consecutive_terms: consecutiveTerms,
+          incumbent_name: state?.incumbent ?? "Sattadheen Dal",
+          opposition_name: state?.opposition ?? "Vipaksh Dal",
+          incumbent_match_score: derivedIncumbentMatch,
+          opposition_match_score: derivedOppositionMatch,
+          total_electorate: 100_000,
+          total_seats: 101,
+          manifesto_trust_score: response.trust_score,
+          force_early: forceEarly,
+        },
+      );
+      const simResponse = electionResponse.result;
+      setState(electionResponse.state);
       setElection(response);
       setSimulation(simResponse);
       const incumbentWon = simResponse.winner === (state?.incumbent ?? "Sattadheen Dal");
@@ -347,7 +372,7 @@ function Dashboard({
       // without the player being able to set it directly.
       setConsecutiveTerms((prev) => (incumbentWon ? prev + 1 : 0));
       setFlash(
-        `🗳️ ${simResponse.winner} jeeta! ${simResponse.incumbent_seats}-${simResponse.opposition_seats}-${simResponse.independent_seats} seats (${simResponse.total_seats} total) · Margin ${simResponse.margin.toLocaleString("en-IN")} votes (${simResponse.margin_pct}%)`
+        `${electionResponse.was_early ? "⚡" : "🗳️"} ${simResponse.winner} jeeta! ${simResponse.incumbent_seats}-${simResponse.opposition_seats}-${simResponse.independent_seats} seats (${simResponse.total_seats} total) · Margin ${simResponse.margin.toLocaleString("en-IN")} votes (${simResponse.margin_pct}%)`
       );
     } catch (error) {
       setFlash(messageFromError(error, "Matganak vifal."));
@@ -374,6 +399,55 @@ function Dashboard({
       setFlash(`🚨 ${response.message}`);
     } catch (error) {
       setFlash(messageFromError(error, "Aapatkaal ghoshit nahi ho saka."));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  // ── Flash Crisis — 60s window: Incumbent patches, Opposition amplifies ──
+  async function patchCrisis() {
+    if (!state?.active_crisis) return;
+    setBusyAction("crisis-patch");
+    try {
+      const response = await matchApi.action<{ state: SovereignState; message: string }>(
+        matchId, "crisis/patch", token, { crisis_id: state.active_crisis.id },
+      );
+      setState(response.state);
+      setFlash(`🛠️ ${response.message}`);
+    } catch (error) {
+      setFlash(messageFromError(error, "Crisis patch nahi ho saka."));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function amplifyCrisis() {
+    if (!state?.active_crisis) return;
+    setBusyAction("crisis-amplify");
+    try {
+      const response = await matchApi.action<{ state: SovereignState; message: string }>(
+        matchId, "crisis/amplify", token, { crisis_id: state.active_crisis.id },
+      );
+      setState(response.state);
+      setFlash(`📢 ${response.message}`);
+    } catch (error) {
+      setFlash(messageFromError(error, "Amplify nahi ho saka."));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  // ── Tactical Cards — the "Midnight Card" deck ───────────────────────────
+  async function playCard(cardId: string) {
+    setBusyAction(`card-${cardId}`);
+    try {
+      const response = await matchApi.action<{ state: SovereignState; card_id: string; message: string }>(
+        matchId, "cards/play", token, { card_id: cardId, target_block_id: targetBlockId || null },
+      );
+      setState(response.state);
+      setFlash(response.message);
+    } catch (error) {
+      setFlash(messageFromError(error, "Card khela nahi ja saka."));
     } finally {
       setBusyAction(null);
     }
@@ -529,6 +603,27 @@ function Dashboard({
             Match #{matchId.slice(0, 8)} · Code {match?.join_code ?? "—"}
           </span>
         </div>
+
+        {/* ── Flash Crisis — 60s response window ────────────────────────── */}
+        {state?.active_crisis && (
+          <CrisisBanner
+            crisis={state.active_crisis}
+            role={role}
+            busyPatch={busyAction === "crisis-patch"}
+            busyAmplify={busyAction === "crisis-amplify"}
+            onPatch={patchCrisis}
+            onAmplify={amplifyCrisis}
+          />
+        )}
+
+        {/* ── Live Exit Poll — continuously-recalculated seat projection ── */}
+        {state?.seat_projection && (
+          <LiveExitPollStrip
+            projection={state.seat_projection}
+            incumbentName={state.incumbent}
+            oppositionName={state.opposition}
+          />
+        )}
 
         <LiveEventFeed headlines={state?.headlines ?? []} />
 
@@ -688,6 +783,18 @@ function Dashboard({
           </Panel>
         </section>
 
+        {/* ── Midnight Card — Tactical Deck ─────────────────────────────── */}
+        <TacticalCardDeck
+          catalog={cardCatalog}
+          availability={state?.card_availability ?? []}
+          role={role}
+          blocks={state?.blocks ?? []}
+          targetBlockId={targetBlockId}
+          onTargetBlockChange={setTargetBlockId}
+          busyCardId={busyAction?.startsWith("card-") ? busyAction.slice(5) : null}
+          onPlay={playCard}
+        />
+
         {/* ── City Development (Buildings + Schemes) ──────────────────── */}
         <section
           className="p-4"
@@ -811,10 +918,14 @@ function Dashboard({
             busy={busyAction === "election"}
             busyEmergency={busyAction === "emergency"}
             emergencyActive={state?.emergency_powers ?? false}
+            electionAvailable={state?.election_available ?? true}
+            earlyElectionAvailable={state?.early_election_available ?? false}
+            cooldownSecondsRemaining={state?.election_cooldown_seconds_remaining ?? 0}
             role={role}
             onManifesto={setManifesto}
             onSpeech={setSpeech}
-            onGrade={gradeElection}
+            onGrade={() => gradeElection(false)}
+            onCallEarly={() => gradeElection(true)}
             onDeclareEmergency={declareEmergency}
           />
           <FederalPanel
@@ -1201,13 +1312,201 @@ function GraphNodeBadge({ node, detected }: { node: GraphNode; detected: boolean
   );
 }
 
+// ─── CrisisBanner — Flash Crisis, 60-second response window ──────────────
+function CrisisBanner({
+  crisis, role, busyPatch, busyAmplify, onPatch, onAmplify,
+}: {
+  crisis: CrisisEvent;
+  role: PlayerRole;
+  busyPatch: boolean;
+  busyAmplify: boolean;
+  onPatch: () => void;
+  onAmplify: () => void;
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(() => Math.max(0, Math.round(crisis.expires_at - Date.now() / 1000)));
+
+  useEffect(() => {
+    setSecondsLeft(Math.max(0, Math.round(crisis.expires_at - Date.now() / 1000)));
+    const id = setInterval(() => {
+      setSecondsLeft(Math.max(0, Math.round(crisis.expires_at - Date.now() / 1000)));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [crisis.id, crisis.expires_at]);
+
+  const patchCost = crisis.base_trust_penalty * 60_000;
+
+  return (
+    <div
+      className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+      style={{ background: "rgba(192,41,42,0.12)", border: "2px solid var(--pt-red)" }}
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-6 w-6 flex-shrink-0" style={{ color: "var(--pt-red-lt)" }} />
+        <div>
+          <div className="text-sm font-black" style={{ color: "var(--pt-red-lt)" }}>
+            ⏱️ FLASH CRISIS — {crisis.headline}
+          </div>
+          <div className="text-xs" style={{ color: "var(--pt-muted)" }}>{crisis.description}</div>
+          <div className="mt-1 text-[10px]" style={{ color: "var(--pt-muted)" }}>
+            {crisis.amplified && <span style={{ color: "var(--pt-red-lt)" }}>📢 Amplified — penalty doubles if unpatched. </span>}
+            Base trust penalty: {crisis.base_trust_penalty}{crisis.amplified ? ` (→ ${crisis.base_trust_penalty * 2} if unpatched)` : ""}
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-shrink-0 items-center gap-2">
+        <div
+          className="flex h-12 w-12 items-center justify-center text-lg font-black"
+          style={{ border: "2px solid var(--pt-red)", color: "var(--pt-red-lt)" }}
+        >
+          {secondsLeft}s
+        </div>
+        {role === "Incumbent" && (
+          <button
+            type="button"
+            onClick={onPatch}
+            disabled={busyPatch}
+            className="flex h-10 items-center gap-1 px-3 text-xs font-black uppercase disabled:opacity-50"
+            style={{ background: "var(--pt-saffron)", color: "#fff" }}
+          >
+            <HandCoins className="h-4 w-4" />
+            {busyPatch ? "…" : `Patch ₹${patchCost.toLocaleString("en-IN")}`}
+          </button>
+        )}
+        {role === "Opposition" && !crisis.amplified && (
+          <button
+            type="button"
+            onClick={onAmplify}
+            disabled={busyAmplify}
+            className="flex h-10 items-center gap-1 px-3 text-xs font-black uppercase disabled:opacity-50"
+            style={{ background: "var(--pt-red)", color: "#fff" }}
+          >
+            <Megaphone className="h-4 w-4" />
+            {busyAmplify ? "…" : "Amplify (20 IP)"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── LiveExitPollStrip — the continuously-recalculated seat projection ───
+function LiveExitPollStrip({
+  projection, incumbentName, oppositionName,
+}: {
+  projection: SeatProjection;
+  incumbentName: string;
+  oppositionName: string;
+}) {
+  return (
+    <div className="p-3" style={{ border: "1px solid var(--pt-line)", background: "var(--pt-panel)" }}>
+      <div className="mb-2 flex items-center gap-2">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "var(--pt-red)" }} />
+        <div className="text-xs font-black uppercase" style={{ color: "var(--pt-white)" }}>
+          Live Exit Poll — Seat Projection
+        </div>
+        <span className="text-[10px]" style={{ color: "var(--pt-muted)" }}>(not an official result — updates continuously)</span>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-[280px_1fr]">
+        <SeatMap
+          key={`${projection.incumbent_seats}-${projection.opposition_seats}-${projection.independent_seats}`}
+          seats={projection.seats}
+          totalSeats={projection.total_seats}
+          incumbentName={incumbentName}
+          oppositionName={oppositionName}
+        />
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {projection.wards.map((w) => (
+            <div key={w.ward} className="p-2" style={{ border: "1px solid var(--pt-line)", background: "var(--pt-ink)" }}>
+              <div className="text-[10px] font-black uppercase" style={{ color: "var(--pt-wheel-lt)" }}>{w.ward} Ward</div>
+              <div className="mt-1 flex items-center gap-1 text-xs">
+                <span style={{ color: "var(--pt-saffron)" }}>{w.incumbent_seats}</span>
+                <span style={{ color: "var(--pt-muted)" }}>-</span>
+                <span style={{ color: "var(--pt-red-lt)" }}>{w.opposition_seats}</span>
+                <span style={{ color: "var(--pt-muted)" }}>-</span>
+                <span style={{ color: "var(--pt-muted)" }}>{w.independent_seats}</span>
+              </div>
+              <div className="mt-1 text-[9px]" style={{ color: "var(--pt-muted)" }}>
+                Trust {w.public_trust} · Pollution {w.pollution} · Unrest {w.worker_unrest}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TacticalCardDeck — the "Midnight Card" deck ──────────────────────────
+function TacticalCardDeck({
+  catalog, availability, role, blocks, targetBlockId, onTargetBlockChange, busyCardId, onPlay,
+}: {
+  catalog: TacticalCard[];
+  availability: CardAvailability[];
+  role: PlayerRole;
+  blocks: InfrastructureBlock[];
+  targetBlockId: string;
+  onTargetBlockChange: (v: string) => void;
+  busyCardId: string | null;
+  onPlay: (cardId: string) => void;
+}) {
+  const myCards = catalog.filter((c) => c.role === role);
+  if (myCards.length === 0) return null;
+
+  return (
+    <section className="p-4" style={{ border: "1px solid var(--pt-line)", background: "var(--pt-panel)" }}>
+      <div className="mb-3 flex items-center gap-2 pb-3" style={{ borderBottom: "1px solid var(--pt-line)" }}>
+        <span style={{ color: "var(--pt-gold)", fontSize: "1.1rem" }}>🃏</span>
+        <div>
+          <div className="font-black text-sm">Midnight Card Deck</div>
+          <div className="text-[10px]" style={{ color: "var(--pt-muted)" }}>तात्कालिक अखाड़ा — cooldown-based sabotage/defense</div>
+        </div>
+        <select
+          value={targetBlockId}
+          onChange={(e) => onTargetBlockChange(e.target.value)}
+          className="ml-auto h-9 px-2 text-xs outline-none"
+          style={{ background: "var(--pt-ink)", border: "1px solid var(--pt-line)", color: "var(--pt-white)" }}
+        >
+          {blocks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {myCards.map((card) => {
+          const avail = availability.find((a) => a.card_id === card.id);
+          const ready = avail?.ready ?? true;
+          const remaining = Math.round(avail?.seconds_remaining ?? 0);
+          const busy = busyCardId === card.id;
+          return (
+            <div key={card.id} className="p-3" style={{ border: "1px solid var(--pt-line)", background: "var(--pt-ink)" }}>
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-black">{card.name}</div>
+                <span className="text-[10px]" style={{ color: "var(--pt-muted)" }}>{card.hindi}</span>
+              </div>
+              <div className="mt-1 text-[10px]" style={{ color: "var(--pt-muted)" }}>{card.description}</div>
+              <button
+                type="button"
+                onClick={() => onPlay(card.id)}
+                disabled={!ready || busy}
+                className="mt-2 flex h-9 w-full items-center justify-center gap-1 text-xs font-black uppercase disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: "var(--pt-gold)", color: "#0C0F14" }}
+              >
+                {busy ? "…" : ready ? "Khelein" : `Cooldown ${remaining}s`}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 // ─── Election Panel — चुनाव अभियान (with 24-Round Simulation + Seat Map) ──
 function ElectionPanel({
   manifesto, speech, election, simulation,
   consecutiveTerms,
   busy, busyEmergency, emergencyActive, role,
+  electionAvailable, earlyElectionAvailable, cooldownSecondsRemaining,
   onManifesto, onSpeech,
-  onGrade,
+  onGrade, onCallEarly,
   onDeclareEmergency,
 }: {
   manifesto: string;
@@ -1219,9 +1518,13 @@ function ElectionPanel({
   busyEmergency: boolean;
   emergencyActive: boolean;
   role: PlayerRole;
+  electionAvailable: boolean;
+  earlyElectionAvailable: boolean;
+  cooldownSecondsRemaining: number;
   onManifesto: (v: string) => void;
   onSpeech: (v: string) => void;
   onGrade: () => void;
+  onCallEarly: () => void;
   onDeclareEmergency: () => void;
 }) {
   // Read the derived scores echoed back in the simulation result
@@ -1229,6 +1532,13 @@ function ElectionPanel({
     ? Math.round((simulation.final_incumbent_votes / (simulation.final_incumbent_votes + simulation.final_opposition_votes)) * 100)
     : null;
   const oppScore = incScore !== null ? 100 - incScore : null;
+
+  const daysRemaining = cooldownSecondsRemaining / 86_400;
+  const hoursRemaining = cooldownSecondsRemaining / 3_600;
+  const cooldownLabel =
+    daysRemaining >= 1
+      ? `${daysRemaining.toFixed(1)} din`
+      : `${Math.max(1, Math.round(hoursRemaining))} ghante`;
 
   return (
     <Panel
@@ -1243,6 +1553,19 @@ function ElectionPanel({
         Chunaav har {simulation?.election_cycle_days ?? 3} din par hota hai · Matganak{" "}
         {simulation?.counting_duration_hours ?? 2} ghante, {simulation?.total_rounds ?? 24} rounds mein.
       </div>
+
+      {/* ── Election cooldown status ─────────────────────────────── */}
+      {!electionAvailable && (
+        <div
+          className="mb-3 p-3 text-xs"
+          style={{ background: "var(--pt-ink)", border: "1px solid var(--pt-line)", color: "var(--pt-muted)" }}
+        >
+          ⏳ Agla niyamit chunaav <b style={{ color: "var(--pt-wheel-lt)" }}>{cooldownLabel}</b> mein hoga.
+          {earlyElectionAvailable && (
+            <> Ya <b style={{ color: "var(--pt-red-lt)" }}>snap election</b> abhi bulaya ja sakta hai — thoda vishwas ka jokham hoga.</>
+          )}
+        </div>
+      )}
 
       {/* ── Manifesto & Speech ─────────────────────────────────── */}
       <div className="grid gap-3">
@@ -1338,13 +1661,37 @@ function ElectionPanel({
       <button
         type="button"
         onClick={onGrade}
-        disabled={busy}
-        className="mt-3 flex h-11 w-full items-center justify-center gap-2 font-black disabled:opacity-50"
+        disabled={busy || !electionAvailable}
+        title={!electionAvailable ? `Agla chunaav ${cooldownLabel} mein hoga` : undefined}
+        className="mt-3 flex h-11 w-full items-center justify-center gap-2 font-black disabled:cursor-not-allowed disabled:opacity-40"
         style={{ background: "var(--pt-green)", border: "1px solid var(--pt-green)", color: "#fff" }}
       >
         <UsersRound className="h-5 w-5" />
-        {busy ? "Matganak Ho Raha Hai…" : "Chunaav Simulate Karein 🗳️"}
+        {busy
+          ? "Matganak Ho Raha Hai…"
+          : electionAvailable
+          ? "Chunaav Simulate Karein 🗳️"
+          : `Agla Chunaav ${cooldownLabel} Mein`}
       </button>
+
+      {/* ── Snap election — only surfaces once >= 2.5 days have passed
+           but the full 3-day cooldown hasn't cleared yet ────────── */}
+      {!electionAvailable && earlyElectionAvailable && (
+        <button
+          type="button"
+          onClick={onCallEarly}
+          disabled={busy || role !== "Incumbent"}
+          className="mt-2 flex h-10 w-full items-center justify-center gap-2 text-sm font-black disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ background: "var(--pt-red)", border: "1px solid var(--pt-red)", color: "#fff" }}
+        >
+          <Radio className="h-4 w-4" />
+          {busy
+            ? "Matganak Ho Raha Hai…"
+            : role === "Incumbent"
+            ? "⚡ Snap Election Bulayein (Jan Vishwas −5)"
+            : "Sirf Incumbent Snap Election Bula Sakta Hai"}
+        </button>
+      )}
 
       {/* ── 24-Round SVG Chart ─────────────────────────────────── */}
       <TenRoundChart simulation={simulation} />
