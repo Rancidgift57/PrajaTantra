@@ -15,6 +15,8 @@ DevelopmentEngine pair. Every mutating action:
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from app.schemas.development import BuildFromCatalogRequest, LaunchSchemeRequest
@@ -28,17 +30,27 @@ from app.schemas.match import (
 )
 from app.schemas.prajatantra import (
     ConstructionRequest,
+    CrisisActionRequest,
     EmergencyRequest,
     FederalGrantRequest,
     LeakRequest,
+    PlayCardRequest,
+    RunElectionRequest,
     StrikeRequest,
+    TacticalCardCatalogResponse,
     TradeDuelRequest,
 )
 from app.services.auth_engine import auth_engine
 from app.services.connection_manager import connection_manager
 from app.services.match_registry import Match, match_registry
+from app.services.tactical_cards import CARD_CATALOG
 
 router = APIRouter(prefix="/api/match", tags=["match"])
+
+# How often the background tick loop recalculates + broadcasts state and
+# rolls the dice on a new Flash Crisis, per match. Self-terminates once
+# both seats disconnect (checked each iteration).
+MATCH_TICK_SECONDS = 6.0
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -227,7 +239,97 @@ async def match_declare_emergency(match_id: str, envelope: MatchActionEnvelope):
     return response
 
 
+@router.post("/{match_id}/elections/simulate-counting")
+async def match_run_election(match_id: str, envelope: MatchActionEnvelope):
+    """
+    Calls an election within this match, subject to SovereignEngine's
+    cooldown (every 3 days by default, or a snap election once >= 2.5 days
+    have passed via force_early). Rejected with 400 if called too soon.
+    """
+    match, role, _username = await _seated(match_id, envelope.token)
+    request = RunElectionRequest(**{**envelope.payload, "role": role})
+    try:
+        response = match.sovereign.run_election(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_state(match)
+    return response
+
+
+# ── Flash Crises — Incumbent patches, Opposition amplifies ───────────────
+
+@router.post("/{match_id}/crisis/patch")
+async def match_patch_crisis(match_id: str, envelope: MatchActionEnvelope):
+    match, role, _username = await _seated(match_id, envelope.token)
+    request = CrisisActionRequest(**{**envelope.payload, "role": role})
+    try:
+        response = match.sovereign.patch_crisis(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_state(match)
+    return response
+
+
+@router.post("/{match_id}/crisis/amplify")
+async def match_amplify_crisis(match_id: str, envelope: MatchActionEnvelope):
+    match, role, _username = await _seated(match_id, envelope.token)
+    request = CrisisActionRequest(**{**envelope.payload, "role": role})
+    try:
+        response = match.sovereign.amplify_crisis(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_state(match)
+    return response
+
+
+# ── Tactical Cards — the "Midnight Card" deck ─────────────────────────────
+
+@router.get("/cards/catalog", response_model=TacticalCardCatalogResponse)
+async def cards_catalog() -> TacticalCardCatalogResponse:
+    return TacticalCardCatalogResponse(cards=CARD_CATALOG)
+
+
+@router.post("/{match_id}/cards/play")
+async def match_play_card(match_id: str, envelope: MatchActionEnvelope):
+    match, role, _username = await _seated(match_id, envelope.token)
+    request = PlayCardRequest(**{**envelope.payload, "role": role})
+    try:
+        response = match.sovereign.play_card(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_state(match)
+    return response
+
+
 # ── Live sync over WebSocket ─────────────────────────────────────────────
+
+async def _match_tick_loop(match: Match) -> None:
+    """
+    Background loop started on first WebSocket connect for a match: every
+    MATCH_TICK_SECONDS it rolls the dice on a new Flash Crisis, resolves
+    any crisis whose 60s window expired unanswered, and re-broadcasts state
+    so the Live Seat Projection visibly ticks even with no player action.
+    Self-terminates once nobody is connected to this match anymore.
+    """
+    try:
+        while True:
+            await asyncio.sleep(MATCH_TICK_SECONDS)
+            if not connection_manager.connected_player_ids(match.id):
+                return
+            match.sovereign.maybe_trigger_crisis()
+            match.sovereign.resolve_expired_crisis()
+            await _broadcast_state(match)
+    except asyncio.CancelledError:
+        return
+
 
 @router.websocket("/ws/{match_id}")
 async def match_socket(websocket: WebSocket, match_id: str, token: str = Query(...)) -> None:
@@ -244,6 +346,10 @@ async def match_socket(websocket: WebSocket, match_id: str, token: str = Query(.
         return
 
     await connection_manager.connect(match_id, profile.id, websocket)
+    # Kick off the background tick loop the first time anyone connects to
+    # this match (guarded so we never start a second one for the same match).
+    if match.tick_task is None or match.tick_task.done():  # type: ignore[union-attr]
+        match.tick_task = asyncio.create_task(_match_tick_loop(match))
     # Send an initial snapshot immediately on connect so the client doesn't
     # have to wait for the other player to act before it has real data.
     await connection_manager.send_to(
