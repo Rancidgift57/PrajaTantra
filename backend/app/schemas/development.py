@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.prajatantra import InfrastructureBlock, PlayerRole, PortfolioType, SovereignStateResponse
+from app.schemas.prajatantra import InfrastructureBlock, PlayerRole, PortfolioType, SovereignStateResponse, Ward
 
 BuildingId = Literal[
     "PORT",
@@ -77,6 +77,10 @@ class BuildFromCatalogRequest(BaseModel):
     budget: int = Field(default=300_000, gt=0)
     siphon_percent: float = Field(default=15, ge=0, le=80)
     layer_depth: int = Field(default=1, ge=1, le=6)
+    ward: Ward | None = Field(
+        default=None,
+        description="Which City Map ward (North/East/South/West) this was physically placed in, if built from the grid. Feeds the live ward-level seat projection.",
+    )
 
 
 class BuildFromCatalogResponse(BaseModel):
