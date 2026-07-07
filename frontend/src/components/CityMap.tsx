@@ -106,6 +106,24 @@ const DEFAULT_GRID: ZoneType[][] = [
   ["WATER",      "WATER",       "WATER",       "ROAD",        "GREEN",       "ROAD",        "ROAD",        "COMMERCIAL"],
 ];
 
+// The 8x8 grid split into 4 wards (quadrants) for the Live Seat Projection's
+// ward-level volatility: concentrating buildings in one quadrant spikes
+// that ward's local pollution/unrest and swings its seat share.
+//   cols 0-3      cols 4-7
+//   ┌───────────┬───────────┐
+//   │   North   │   East    │  rows 0-3
+//   ├───────────┼───────────┤
+//   │   West    │   South   │  rows 4-7
+//   └───────────┴───────────┘
+function wardFor(row: number, col: number): "North" | "East" | "South" | "West" {
+  const top = row < 4;
+  const left = col < 4;
+  if (top && left) return "North";
+  if (top && !left) return "East";
+  if (!top && !left) return "South";
+  return "West";
+}
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 type PlacedBuilding = {
@@ -226,6 +244,7 @@ export default function CityMap({
         budget: Math.max(budget, selectedBuilding.base_cost),
         siphon_percent: siphon,
         layer_depth: 1,
+        ward: wardFor(row, col),
       });
       onStateUpdate(res.state);
       const next: MapState = {
