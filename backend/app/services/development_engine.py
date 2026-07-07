@@ -335,6 +335,7 @@ class DevelopmentEngine:
             unrest_delta=entry.unrest_delta + siphon_drag,
             trust_delta=entry.trust_delta - siphon_drag,
             prestige_delta=entry.prestige_delta,
+            ward=payload.ward,
         )
 
         memory.blocks.append(block)
