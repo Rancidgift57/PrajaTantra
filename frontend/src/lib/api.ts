@@ -62,6 +62,8 @@ export type CityStats = {
   national_prestige: number;
 };
 
+export type Ward = "North" | "East" | "South" | "West";
+
 export type InfrastructureBlock = {
   id: string;
   name: string;
@@ -73,6 +75,58 @@ export type InfrastructureBlock = {
   unrest_delta: number;
   trust_delta: number;
   prestige_delta: number;
+  ward: Ward | null;
+  frozen_until: number | null;
+  strike_blocked_until: number | null;
+};
+
+export type WardProjection = {
+  ward: Ward;
+  public_trust: number;
+  pollution: number;
+  worker_unrest: number;
+  incumbent_seats: number;
+  opposition_seats: number;
+  independent_seats: number;
+  seats_total: number;
+};
+
+export type SeatProjection = {
+  total_seats: number;
+  incumbent_seats: number;
+  opposition_seats: number;
+  independent_seats: number;
+  seats: SeatResult[];
+  wards: WardProjection[];
+};
+
+export type CrisisEvent = {
+  id: string;
+  ward: Ward;
+  headline: string;
+  description: string;
+  started_at: number;
+  expires_at: number;
+  base_trust_penalty: number;
+  patched: boolean;
+  amplified: boolean;
+  resolved: boolean;
+};
+
+export type TacticalCard = {
+  id: string;
+  name: string;
+  hindi: string;
+  role: PlayerRole;
+  cooldown_seconds: number;
+  description: string;
+};
+
+export type CardAvailability = {
+  card_id: string;
+  ready: boolean;
+  ready_at: number | null;
+  seconds_remaining: number;
 };
 
 export type SovereignState = {
@@ -88,6 +142,12 @@ export type SovereignState = {
   federal_grants: string[];
   trade_buffs: string[];
   emergency_powers: boolean;
+  election_available: boolean;
+  early_election_available: boolean;
+  election_cooldown_seconds_remaining: number;
+  seat_projection: SeatProjection;
+  active_crisis: CrisisEvent | null;
+  card_availability: CardAvailability[];
 };
 
 export type ConstructionResponse = {
@@ -216,6 +276,21 @@ export type EmergencyResponse = {
   message: string;
 };
 
+// Match-scoped, cooldown-enforced election calling. Only the Incumbent may
+// call one; the server rejects with 400 if it's too soon (see
+// SovereignState.election_available / early_election_available).
+export type RunElectionRequest = TenRoundSimulationRequest & {
+  role: PlayerRole;
+  force_early?: boolean;
+};
+
+export type RunElectionResponse = {
+  state: SovereignState;
+  result: TenRoundSimulationResponse;
+  was_early: boolean;
+  message: string;
+};
+
 // ── Auth / Profile / Leaderboard types ─────────────────────────────────────
 
 export type Ideology = "Industrialist" | "Green" | "Socialist" | "Nationalist" | "Technocrat";
@@ -338,6 +413,9 @@ export const api = {
   declareEmergency: (payload: EmergencyRequest) =>
     postJson<EmergencyResponse, EmergencyRequest>("/api/prajatantra/emergency/declare", payload),
 
+  // ── Tactical Cards catalog (static, not match-scoped) ─────────────────────
+  cardCatalog: () => getJson<{ cards: TacticalCard[] }>("/api/match/cards/catalog"),
+
   // ── Auth / Profile / City naming / Leaderboard ────────────────────────────
   register: (payload: RegisterPayload) =>
     postJson<AuthResponse, RegisterPayload>("/api/auth/register", payload),
@@ -404,6 +482,7 @@ export type BuildFromCatalogPayload = {
   budget: number;
   siphon_percent: number;
   layer_depth: number;
+  ward?: Ward;
 };
 
 export type CityDevelopmentResponse = {
