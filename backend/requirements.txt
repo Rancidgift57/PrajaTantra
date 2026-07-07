@@ -5,4 +5,7 @@ python-dotenv==1.0.1
 neo4j==5.27.0
 pydantic[email]
 asyncpg
-
+# Optional: enables Redis-backed Tactical Card cooldowns (see
+# services/cooldown_store.py). Without it, cooldowns fall back to an
+# in-memory dict — fine for a single backend process/dev use.
+redis
