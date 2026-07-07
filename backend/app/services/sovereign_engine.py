@@ -1,11 +1,17 @@
+import random
+import time
 from dataclasses import dataclass, field
 from uuid import uuid4
 
 from app.schemas.prajatantra import (
     AuditResponse,
+    CardAvailability,
     CityStats,
     ConstructionRequest,
     ConstructionResponse,
+    CrisisActionRequest,
+    CrisisActionResponse,
+    CrisisEvent,
     EmergencyRequest,
     EmergencyResponse,
     FederalGrantRequest,
@@ -13,14 +19,49 @@ from app.schemas.prajatantra import (
     InfrastructureBlock,
     LeakRequest,
     LeakResponse,
+    PlayCardRequest,
+    PlayCardResponse,
+    RunElectionRequest,
+    RunElectionResponse,
     ScamOperationRequest,
     SovereignStateResponse,
     StrikeRequest,
     StrikeResponse,
     TradeDuelRequest,
     TradeDuelResponse,
+    Ward,
 )
+from app.services.cooldown_store import cooldown_store
 from app.services.corruption_graph import corruption_graph
+from app.services.incumbency_engine import incumbency_engine
+from app.services.seat_projection_engine import project_seats
+from app.services.tactical_cards import CARD_CATALOG, get_card
+
+# Elections can only be held once every ELECTION_COOLDOWN_DAYS. A "snap"
+# election can be called explicitly (force_early=True) once at least
+# EARLY_ELECTION_MIN_DAYS have passed — a deliberate political gamble that
+# costs a little public trust, mirroring real-world early-election drama.
+ELECTION_COOLDOWN_DAYS = 3.0
+EARLY_ELECTION_MIN_DAYS = 2.5
+
+# ── Flash Crises ─────────────────────────────────────────────────────────
+CRISIS_CHANCE_PER_TICK = 0.15
+CRISIS_WINDOW_SECONDS = 60.0
+CRISIS_PATCH_COST_PER_SEVERITY = 60_000
+CRISIS_AMPLIFY_IP_COST = 20
+WARDS: list[Ward] = ["North", "East", "South", "West"]
+_CRISIS_TEMPLATES = [
+    ("Industrial Fire", "A blaze breaks out on a factory floor — workers evacuated, news cameras rolling.", 6),
+    ("Water Pipeline Burst", "A major pipeline bursts, flooding a market street.", 5),
+    ("Transport Strike Threat", "Auto-rickshaw unions threaten a flash strike over fuel prices.", 4),
+    ("Hospital Overcrowding", "A ward hospital reports overcrowding after a viral outbreak.", 5),
+    ("Bridge Crack Reported", "Engineers flag hairline cracks on a flyover support pillar.", 7),
+]
+
+# ── Tactical Cards ───────────────────────────────────────────────────────
+SECTION144_STRIKE_BLOCK_SECONDS = 180
+RTI_STING_FREEZE_SECONDS = 90
+TOOLDOWN_HALT_SECONDS = 60
 
 
 @dataclass
@@ -40,11 +81,23 @@ class SovereignMemory:
     trade_buffs: list[str] = field(default_factory=list)
     national_treasury: int = 2_800_000
     emergency_powers: bool = False
+    # Epoch seconds of the last election held in this match; None = never
+    # held one yet, so the very first election is always available.
+    last_election_at: float | None = None
+    # One-shot consumable set by the Incumbent's Media Distraction card;
+    # halves the very next leak's trust damage, then resets to 1.0.
+    leak_damage_multiplier_next: float = 1.0
+    # A Flash Crisis currently awaiting a response (60s window), if any.
+    active_crisis: CrisisEvent | None = None
 
 
 class SovereignEngine:
     def __init__(self) -> None:
         self.memory = SovereignMemory()
+        # Set by MatchRegistry right after creation so cooldown_store can
+        # scope Tactical Card cooldowns per-match. None for the legacy
+        # singleton `sovereign_engine` used by single-player routes.
+        self.match_id: str | None = None
         if not self.memory.blocks:
             self.memory.blocks.extend(
                 [
@@ -88,6 +141,9 @@ class SovereignEngine:
             )
 
     def state(self) -> SovereignStateResponse:
+        available, early_available, seconds_remaining = self._election_status()
+        self._unfreeze_expired_blocks()
+        self.resolve_expired_crisis()
         return SovereignStateResponse(
             cycle_day=self.memory.cycle_day,
             active_role=self.memory.active_role,  # type: ignore[arg-type]
@@ -101,6 +157,225 @@ class SovereignEngine:
             federal_grants=self.memory.federal_grants[-4:],
             trade_buffs=self.memory.trade_buffs[-4:],
             emergency_powers=self.memory.emergency_powers,
+            election_available=available,
+            # Only meaningful as a distinct "snap election" state while the
+            # regular 3-day cooldown hasn't cleared yet.
+            early_election_available=early_available and not available,
+            election_cooldown_seconds_remaining=seconds_remaining,
+            # Live Exit Poll — recalculated fresh on every state build, so
+            # every WebSocket broadcast (any action, or the periodic tick)
+            # carries an up-to-date projection.
+            seat_projection=project_seats(self.memory.city, self.memory.blocks, self.memory.incumbent, self.memory.opposition),
+            active_crisis=self.memory.active_crisis,
+            card_availability=self._card_availability(),
+        )
+
+    def _unfreeze_expired_blocks(self) -> None:
+        now = time.time()
+        for block in self.memory.blocks:
+            if block.frozen_until is not None and now >= block.frozen_until:
+                block.frozen_until = None
+            if block.strike_blocked_until is not None and now >= block.strike_blocked_until:
+                block.strike_blocked_until = None
+
+    def _card_availability(self) -> list[CardAvailability]:
+        match_id = self.match_id or "unscoped"
+        results: list[CardAvailability] = []
+        for card in CARD_CATALOG:
+            ready_at = cooldown_store.get_ready_at(match_id, card.role, card.id)
+            remaining = cooldown_store.seconds_remaining(match_id, card.role, card.id)
+            results.append(
+                CardAvailability(
+                    card_id=card.id,
+                    ready=remaining <= 0,
+                    ready_at=ready_at if ready_at > 0 else None,
+                    seconds_remaining=remaining,
+                )
+            )
+        return results
+
+    def _election_status(self) -> tuple[bool, bool, float]:
+        """Returns (available, early_available, seconds_remaining_until_available)."""
+        if self.memory.last_election_at is None:
+            return True, False, 0.0
+        elapsed_days = (time.time() - self.memory.last_election_at) / 86_400.0
+        available = elapsed_days >= ELECTION_COOLDOWN_DAYS
+        early_available = elapsed_days >= EARLY_ELECTION_MIN_DAYS
+        remaining_days = max(0.0, ELECTION_COOLDOWN_DAYS - elapsed_days)
+        return available, early_available, remaining_days * 86_400.0
+
+    # ── Flash Crises ────────────────────────────────────────────────────────
+
+    def maybe_trigger_crisis(self) -> None:
+        """Called from the match's periodic tick loop only (never from a
+        plain state() read) so crises spawn on a steady cadence rather than
+        every time anyone happens to fetch state."""
+        if self.memory.active_crisis is not None:
+            return
+        if random.random() > CRISIS_CHANCE_PER_TICK:
+            return
+        ward = random.choice(WARDS)
+        headline, description, penalty = random.choice(_CRISIS_TEMPLATES)
+        now = time.time()
+        self.memory.active_crisis = CrisisEvent(
+            id=uuid4().hex[:10],
+            ward=ward,
+            headline=f"{headline} in {ward} Ward",
+            description=description,
+            started_at=now,
+            expires_at=now + CRISIS_WINDOW_SECONDS,
+            base_trust_penalty=penalty,
+        )
+        self.memory.headlines.append(
+            f"⏱️ FLASH: {headline} reported in {ward} Ward — 60 seconds to respond!"
+        )
+
+    def resolve_expired_crisis(self) -> None:
+        crisis = self.memory.active_crisis
+        if crisis is None or crisis.resolved:
+            return
+        if time.time() < crisis.expires_at:
+            return
+        if not crisis.patched:
+            penalty = crisis.base_trust_penalty * (2 if crisis.amplified else 1)
+            self.memory.city.public_trust = self._clamp(self.memory.city.public_trust - penalty)
+            self.memory.headlines.append(
+                f"📉 {crisis.ward} Ward crisis went unanswered — public trust fell by {penalty}."
+                + (" Opposition's amplification doubled the damage." if crisis.amplified else "")
+            )
+        crisis.resolved = True
+        self.memory.active_crisis = None
+
+    def patch_crisis(self, payload: CrisisActionRequest) -> CrisisActionResponse:
+        self._require_role(payload.role, "Incumbent", "Only the Incumbent can patch a crisis.")
+        crisis = self.memory.active_crisis
+        if crisis is None or crisis.id != payload.crisis_id or crisis.resolved:
+            raise ValueError("No matching active crisis to patch.")
+        if time.time() >= crisis.expires_at:
+            raise ValueError("Too late — the response window already closed.")
+        cost = crisis.base_trust_penalty * CRISIS_PATCH_COST_PER_SEVERITY
+        if self.memory.city.treasury < cost:
+            raise ValueError(f"Not enough treasury to patch this crisis (need ₹{cost:,}).")
+        self.memory.city.treasury -= cost
+        crisis.patched = True
+        crisis.resolved = True
+        self.memory.active_crisis = None
+        self.memory.headlines.append(
+            f"🛠️ {crisis.ward} Ward crisis contained — ₹{cost:,} spent, public trust held."
+        )
+        return CrisisActionResponse(state=self.state(), message=f"Crisis patched for ₹{cost:,}.")
+
+    def amplify_crisis(self, payload: CrisisActionRequest) -> CrisisActionResponse:
+        self._require_role(payload.role, "Opposition", "Only the Opposition can amplify a crisis narrative.")
+        crisis = self.memory.active_crisis
+        if crisis is None or crisis.id != payload.crisis_id or crisis.resolved:
+            raise ValueError("No matching active crisis to amplify.")
+        if time.time() >= crisis.expires_at:
+            raise ValueError("Too late — the response window already closed.")
+        if crisis.amplified:
+            raise ValueError("This crisis is already amplified.")
+        if self.memory.influence_points < CRISIS_AMPLIFY_IP_COST:
+            raise ValueError(f"Not enough Influence Points to amplify (need {CRISIS_AMPLIFY_IP_COST} IP).")
+        self.memory.influence_points -= CRISIS_AMPLIFY_IP_COST
+        crisis.amplified = True
+        self.memory.headlines.append(
+            f"📢 Opposition is amplifying the {crisis.ward} Ward crisis narrative — "
+            "the trust penalty will double if the Incumbent doesn't pay in time."
+        )
+        return CrisisActionResponse(
+            state=self.state(),
+            message="Narrative amplified — penalty doubles if the Incumbent doesn't pay in time.",
+        )
+
+    # ── Tactical Cards ──────────────────────────────────────────────────────
+
+    def play_card(self, payload: PlayCardRequest) -> PlayCardResponse:
+        card = get_card(payload.card_id)
+        if card is None:
+            raise ValueError("Unknown tactical card.")
+        self._require_role(payload.role, card.role, f"Only the {card.role} can play {card.name}.")
+
+        match_id = self.match_id or "unscoped"
+        if not cooldown_store.is_ready(match_id, card.role, card.id):
+            remaining = round(cooldown_store.seconds_remaining(match_id, card.role, card.id))
+            raise ValueError(f"{card.name} is on cooldown for {remaining} more second(s).")
+
+        now = time.time()
+        if card.id == "SECTION_144":
+            block = self._find_block(payload.target_block_id or "")
+            block.strike_blocked_until = now + SECTION144_STRIKE_BLOCK_SECONDS
+            message = f"🚧 Section 144 imposed on {block.name} — strikes blocked for 3 minutes."
+        elif card.id == "MEDIA_DISTRACTION":
+            self.memory.leak_damage_multiplier_next = 0.5
+            message = "📺 Media Distraction primed — the next leaked scam will do half damage."
+        elif card.id == "RTI_STING":
+            block = self._find_block(payload.target_block_id or "")
+            block.frozen_until = now + RTI_STING_FREEZE_SECONDS
+            clawback = max(0, block.gold_per_tick)
+            self.memory.city.treasury = max(0, self.memory.city.treasury - clawback)
+            message = f"📄 RTI Sting freezes {block.name}'s revenue for 90s — ₹{clawback:,} clawed back immediately."
+        elif card.id == "TOOLDOWN":
+            block = self._find_block(payload.target_block_id or "")
+            block.frozen_until = now + TOOLDOWN_HALT_SECONDS
+            self.memory.city.worker_unrest = self._clamp(self.memory.city.worker_unrest + 15)
+            message = f"🛑 {block.name} halted — citywide worker unrest spiked."
+        else:
+            raise ValueError("Unhandled tactical card.")
+
+        cooldown_store.set_cooldown(match_id, card.role, card.id, card.cooldown_seconds)
+        self.memory.headlines.append(message)
+        return PlayCardResponse(state=self.state(), card_id=card.id, message=message)
+
+    def run_election(self, payload: RunElectionRequest) -> RunElectionResponse:
+        """
+        Elections are rate-limited: by default one every 3 in-game days.
+        An Incumbent who's confident (or desperate) can call an explicit
+        early/snap election once at least 2.5 days have passed — but it
+        costs a small public-trust hit for the political gamble.
+        """
+        self._require_role(payload.role, "Incumbent", "Only the Incumbent can call an election.")
+        available, early_available, seconds_remaining = self._election_status()
+        days_remaining = seconds_remaining / 86_400.0
+
+        was_early = False
+        if not available:
+            if payload.force_early and early_available:
+                was_early = True
+            elif early_available:
+                raise ValueError(
+                    f"The next scheduled election isn't due for {days_remaining:.1f} more day(s). "
+                    "A snap election is available now — call it explicitly if you want to risk it early."
+                )
+            else:
+                raise ValueError(
+                    f"Elections can only be held once every {ELECTION_COOLDOWN_DAYS:g} days. "
+                    f"Next election in {days_remaining:.1f} day(s)."
+                )
+
+        result = incumbency_engine.simulate_ten_rounds(payload)
+        self.memory.last_election_at = time.time()
+
+        if was_early:
+            self.memory.city.public_trust = self._clamp(self.memory.city.public_trust - 5)
+            self.memory.headlines.append(
+                f"⚡ Snap election called early! {result.winner} wins "
+                f"{result.incumbent_seats}-{result.opposition_seats}-{result.independent_seats}."
+            )
+        else:
+            self.memory.headlines.append(
+                f"🗳️ Election held on schedule. {result.winner} wins "
+                f"{result.incumbent_seats}-{result.opposition_seats}-{result.independent_seats}."
+            )
+
+        return RunElectionResponse(
+            state=self.state(),
+            result=result,
+            was_early=was_early,
+            message=(
+                "⚡ Snap election called — public trust dipped slightly from the gamble."
+                if was_early
+                else "🗳️ Election held on schedule."
+            ),
         )
 
     def declare_emergency(self, payload: EmergencyRequest) -> EmergencyResponse:
@@ -178,6 +453,11 @@ class SovereignEngine:
     def strike(self, payload: StrikeRequest) -> StrikeResponse:
         self._require_role(payload.role, "Opposition", "Only the Opposition can organize labor strikes.")
         block = self._find_block(payload.target_block_id)
+        if block.strike_blocked_until is not None and time.time() < block.strike_blocked_until:
+            remaining = round(block.strike_blocked_until - time.time())
+            raise ValueError(
+                f"{block.name} is under Section 144 — strikes are blocked for {remaining} more second(s)."
+            )
         if payload.influence_spend > self.memory.influence_points:
             raise ValueError("Not enough Influence Points for this strike.")
 
@@ -210,6 +490,13 @@ class SovereignEngine:
             headline = f"Smoking-gun ledger leak shakes City Hall: {payload.audit.smoking_gun}."
         else:
             headline = f"Opposition leak raises procurement questions around {payload.audit.project_name}."
+
+        # Media Distraction (Incumbent tactical card) halves the next leak's
+        # damage — consumed here, one-shot.
+        if self.memory.leak_damage_multiplier_next != 1.0:
+            trust_damage = round(trust_damage * self.memory.leak_damage_multiplier_next)
+            headline += " (Media Distraction blunted the story's impact.)"
+            self.memory.leak_damage_multiplier_next = 1.0
 
         self.memory.city.public_trust = self._clamp(self.memory.city.public_trust - trust_damage)
         self.memory.city.corruption_leaks += 1
@@ -316,4 +603,3 @@ class SovereignEngine:
 
 
 sovereign_engine = SovereignEngine()
-
