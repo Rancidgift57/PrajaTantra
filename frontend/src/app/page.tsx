@@ -519,8 +519,8 @@ function Dashboard({
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <header
-          className="grid gap-4 pb-4 xl:grid-cols-[1fr_520px]"
-          style={{ borderBottom: "1px solid var(--pt-line)" }}
+          className="relative grid gap-4 pb-4 xl:grid-cols-[1fr_520px]"
+          style={{ borderBottom: "1px solid var(--pt-line)", zIndex: 30 }}
         >
           <div>
             <div
