@@ -515,7 +515,7 @@ function Dashboard({
       {/* OpenFront-style floating leaderboard, top-left */}
       <Leaderboard token={token} />
 
-      <div className="mx-auto flex w-full max-w-[1760px] flex-col gap-4 px-4 py-4 lg:px-6">
+      <div className="mx-auto flex w-full max-w-[1760px] flex-col gap-4 px-4 pb-4 pt-20 lg:px-6">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <header
