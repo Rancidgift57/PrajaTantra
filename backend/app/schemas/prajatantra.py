@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, computed_field
 PortfolioType = Literal["Industrial", "Social", "Strategic"]
 Ideology = Literal["Industrialist", "Green", "Socialist", "Nationalist", "Technocrat"]
 PlayerRole = Literal["Incumbent", "Opposition"]
+Ward = Literal["North", "East", "South", "West"]
 
 
 class ScamOperationRequest(BaseModel):
@@ -149,6 +150,120 @@ class InfrastructureBlock(BaseModel):
     unrest_delta: int
     trust_delta: int
     prestige_delta: int
+    ward: Ward | None = Field(
+        default=None,
+        description="Which of the 4 City Map wards this block was physically placed in, if any (blocks built outside the grid, e.g. via the Sarkari Yojana panel, are unassigned).",
+    )
+    frozen_until: float | None = Field(
+        default=None,
+        description="Epoch seconds until which this block's revenue is frozen (Opposition's RTI Sting card).",
+    )
+    strike_blocked_until: float | None = Field(
+        default=None,
+        description="Epoch seconds until which strikes against this block are blocked (Incumbent's Section 144 card).",
+    )
+
+
+class SeatResult(BaseModel):
+    """One bloc in a seat map (rendered as a hemicycle chart) — used by both
+    the live projection (SeatProjection) and the official election result
+    (TenRoundSimulationResponse)."""
+
+    party: str
+    role: Literal["Incumbent", "Opposition", "Independent"]
+    seats: int = Field(ge=0)
+    color: str
+    seat_share_pct: float
+
+
+class WardProjection(BaseModel):
+    """Live, non-authoritative seat projection for one of the 4 City Map
+    wards — recalculated fresh every time SovereignState is broadcast."""
+
+    ward: Ward
+    public_trust: int = Field(ge=0, le=100)
+    pollution: int = Field(ge=0, le=100)
+    worker_unrest: int = Field(ge=0, le=100)
+    incumbent_seats: int = Field(ge=0)
+    opposition_seats: int = Field(ge=0)
+    independent_seats: int = Field(ge=0)
+    seats_total: int = Field(ge=0)
+
+
+class SeatProjection(BaseModel):
+    """
+    The 'Live Exit Poll' — a continuously-recalculated seat projection
+    derived purely from current city/ward stats (public trust, unrest,
+    pollution, corruption leaks). This is NOT an election result; it's a
+    live-fluctuating forecast shown on the hemicycle in the top nav, and it
+    updates every time SovereignState is broadcast (i.e. after any action,
+    or on the periodic match tick).
+    """
+
+    total_seats: int = 101
+    incumbent_seats: int = 0
+    opposition_seats: int = 0
+    independent_seats: int = 0
+    seats: list[SeatResult] = Field(default_factory=list)
+    wards: list[WardProjection] = Field(default_factory=list)
+
+
+class CrisisEvent(BaseModel):
+    """A Flash Crisis — a localized emergency with a 60-second response
+    window before its trust penalty (possibly amplified) lands."""
+
+    id: str
+    ward: Ward
+    headline: str
+    description: str
+    started_at: float
+    expires_at: float
+    base_trust_penalty: int = Field(ge=1)
+    patched: bool = False
+    amplified: bool = False
+    resolved: bool = False
+
+
+class CrisisActionRequest(BaseModel):
+    role: PlayerRole = "Incumbent"
+    crisis_id: str
+
+
+class CrisisActionResponse(BaseModel):
+    state: SovereignStateResponse
+    message: str
+
+
+class TacticalCard(BaseModel):
+    id: str
+    name: str
+    hindi: str
+    role: PlayerRole
+    cooldown_seconds: int = Field(ge=1)
+    description: str
+
+
+class TacticalCardCatalogResponse(BaseModel):
+    cards: list[TacticalCard]
+
+
+class CardAvailability(BaseModel):
+    card_id: str
+    ready: bool
+    ready_at: float | None = None
+    seconds_remaining: float = 0.0
+
+
+class PlayCardRequest(BaseModel):
+    role: PlayerRole = "Incumbent"
+    card_id: str
+    target_block_id: str | None = None
+
+
+class PlayCardResponse(BaseModel):
+    state: SovereignStateResponse
+    card_id: str
+    message: str
 
 
 class SovereignStateResponse(BaseModel):
@@ -167,6 +282,24 @@ class SovereignStateResponse(BaseModel):
         default=False,
         description="True once the Incumbent has declared Emergency after a >80% seat supermajority.",
     )
+    election_available: bool = Field(
+        default=True,
+        description="True once at least 3 days have passed since the last election (or none has been held yet).",
+    )
+    early_election_available: bool = Field(
+        default=False,
+        description="True once at least 2.5 days have passed but fewer than 3 — a snap election can be explicitly called.",
+    )
+    election_cooldown_seconds_remaining: float = Field(
+        default=0.0,
+        description="Seconds until the next scheduled (non-early) election is available.",
+    )
+    seat_projection: SeatProjection = Field(default_factory=SeatProjection)
+    active_crisis: CrisisEvent | None = Field(
+        default=None,
+        description="A Flash Crisis currently awaiting a response (60s window), if any.",
+    )
+    card_availability: list[CardAvailability] = Field(default_factory=list)
 
 
 class ConstructionRequest(BaseModel):
@@ -290,16 +423,6 @@ class CountingRoundResult(BaseModel):
     running_opposition_total: int = Field(ge=0)
 
 
-class SeatResult(BaseModel):
-    """One bloc in the final seat map (rendered as a hemicycle chart)."""
-
-    party: str
-    role: Literal["Incumbent", "Opposition", "Independent"]
-    seats: int = Field(ge=0)
-    color: str
-    seat_share_pct: float
-
-
 class TenRoundSimulationRequest(BaseModel):
     """
     Full 24-round counting simulation across a city's entire electorate.
@@ -392,6 +515,34 @@ class EmergencyResponse(BaseModel):
     state: SovereignStateResponse
     granted: bool
     seat_share_pct: float
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# Match-scoped election calling (rate-limited: every 3 days, snap at 2.5)
+# ---------------------------------------------------------------------------
+
+class RunElectionRequest(TenRoundSimulationRequest):
+    """
+    The match-scoped counterpart to TenRoundSimulationRequest. Only the
+    Incumbent may call an election (real-world parliamentary systems put
+    the election calendar in the sitting government's hands). Subject to
+    SovereignEngine's cooldown: normally once every 3 days; force_early
+    unlocks a snap election once at least 2.5 days have passed, at the
+    cost of a small public-trust hit.
+    """
+
+    role: PlayerRole = "Incumbent"
+    force_early: bool = Field(
+        default=False,
+        description="Call a snap/early election once >= 2.5 days have passed, without waiting the full 3-day cycle.",
+    )
+
+
+class RunElectionResponse(BaseModel):
+    state: SovereignStateResponse
+    result: TenRoundSimulationResponse
+    was_early: bool
     message: str
 
     # -- Election-day scheduling (flavour + UI countdowns) -------------------
