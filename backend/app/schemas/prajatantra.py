@@ -164,6 +164,14 @@ class InfrastructureBlock(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# NOTE: The following "core state" models were moved up from further down in
+# the file. They must be defined BEFORE any model that references
+# SovereignStateResponse (e.g. CrisisActionResponse, PlayCardResponse,
+# ConstructionResponse, etc.) — that ordering bug was the cause of the
+# `NameError: name 'SovereignStateResponse' is not defined` crash on deploy.
+# ---------------------------------------------------------------------------
+
 class SeatResult(BaseModel):
     """One bloc in a seat map (rendered as a hemicycle chart) — used by both
     the live projection (SeatProjection) and the official election result
@@ -224,46 +232,11 @@ class CrisisEvent(BaseModel):
     resolved: bool = False
 
 
-class CrisisActionRequest(BaseModel):
-    role: PlayerRole = "Incumbent"
-    crisis_id: str
-
-
-class CrisisActionResponse(BaseModel):
-    state: SovereignStateResponse
-    message: str
-
-
-class TacticalCard(BaseModel):
-    id: str
-    name: str
-    hindi: str
-    role: PlayerRole
-    cooldown_seconds: int = Field(ge=1)
-    description: str
-
-
-class TacticalCardCatalogResponse(BaseModel):
-    cards: list[TacticalCard]
-
-
 class CardAvailability(BaseModel):
     card_id: str
     ready: bool
     ready_at: float | None = None
     seconds_remaining: float = 0.0
-
-
-class PlayCardRequest(BaseModel):
-    role: PlayerRole = "Incumbent"
-    card_id: str
-    target_block_id: str | None = None
-
-
-class PlayCardResponse(BaseModel):
-    state: SovereignStateResponse
-    card_id: str
-    message: str
 
 
 class SovereignStateResponse(BaseModel):
@@ -300,6 +273,46 @@ class SovereignStateResponse(BaseModel):
         description="A Flash Crisis currently awaiting a response (60s window), if any.",
     )
     card_availability: list[CardAvailability] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# End of relocated core-state block. Everything below is unchanged, just now
+# safely able to reference SovereignStateResponse.
+# ---------------------------------------------------------------------------
+
+class CrisisActionRequest(BaseModel):
+    role: PlayerRole = "Incumbent"
+    crisis_id: str
+
+
+class CrisisActionResponse(BaseModel):
+    state: SovereignStateResponse
+    message: str
+
+
+class TacticalCard(BaseModel):
+    id: str
+    name: str
+    hindi: str
+    role: PlayerRole
+    cooldown_seconds: int = Field(ge=1)
+    description: str
+
+
+class TacticalCardCatalogResponse(BaseModel):
+    cards: list[TacticalCard]
+
+
+class PlayCardRequest(BaseModel):
+    role: PlayerRole = "Incumbent"
+    card_id: str
+    target_block_id: str | None = None
+
+
+class PlayCardResponse(BaseModel):
+    state: SovereignStateResponse
+    card_id: str
+    message: str
 
 
 class ConstructionRequest(BaseModel):
