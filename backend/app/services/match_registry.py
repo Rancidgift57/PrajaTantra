@@ -50,6 +50,10 @@ class Match:
     incumbent: Seat | None = None
     opposition: Seat | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Holds the asyncio.Task running _match_tick_loop (see routers/match.py),
+    # started on first WebSocket connect and self-terminating once both
+    # seats disconnect. Not part of the public API — internal wiring only.
+    tick_task: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.development is None:
@@ -74,6 +78,7 @@ class MatchRegistry:
     def create_match(self, host_player_id: str, host_username: str) -> Match:
         match = Match()
         match.incumbent = Seat(player_id=host_player_id, username=host_username)
+        match.sovereign.match_id = match.id
         self._matches[match.id] = match
         self._by_join_code[match.join_code] = match.id
         return match
