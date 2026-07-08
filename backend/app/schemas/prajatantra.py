@@ -504,6 +504,23 @@ class TenRoundSimulationResponse(BaseModel):
     incumbent_name: str = "Sattadheen Dal"
     opposition_name: str = "Vipaksh Dal"
 
+    # -- Election-day scheduling + seat map (bug fix: incumbency_engine.py
+    # was already constructing this response with these fields, but they
+    # weren't declared here, so pydantic silently dropped them and
+    # SovereignEngine.run_election's `result.incumbent_seats` access below
+    # crashed with AttributeError on every single election.) -------------
+    election_cycle_days: int = 3
+    counting_duration_hours: int = 2
+    total_rounds: int = 24
+    total_seats: int = 101
+    incumbent_seats: int = 0
+    opposition_seats: int = 0
+    independent_seats: int = 0
+    seats: list[SeatResult] = Field(default_factory=list)
+    emergency_eligible: bool = False
+    emergency_threshold_pct: float = 80.0
+    emergency_message: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Emergency (supermajority dictatorship-powers) schemas

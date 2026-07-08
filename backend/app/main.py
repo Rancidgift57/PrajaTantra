@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import db
 from app.config import settings
-from app.routers import auth, development, match, prajatantra
+from app.routers import auth, campaign, development, match, prajatantra
 from app.services.auth_engine import auth_engine
 
 
@@ -45,6 +45,7 @@ app.include_router(prajatantra.router)
 app.include_router(auth.router)
 app.include_router(development.router)
 app.include_router(match.router)
+app.include_router(campaign.router)
 
 
 @app.get("/health")
