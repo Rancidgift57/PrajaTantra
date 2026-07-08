@@ -23,12 +23,6 @@ export type MatchStateResponse = {
   state: SovereignState;
 };
 
-export type QuickMatchStatus = {
-  status: "matched" | "waiting" | "idle";
-  match: MatchInfo | null;
-  queue_size: number;
-};
-
 async function postJson<TResponse>(path: string, payload: unknown): Promise<TResponse> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -57,15 +51,6 @@ export const matchApi = {
     postJson<MatchInfo>("/api/match/join", { token, join_code }),
   getState: (matchId: string, token: string) =>
     getJson<MatchStateResponse>(`/api/match/${matchId}?token=${encodeURIComponent(token)}`),
-
-  // Quick Match — auto-pairs with a free player instead of a join code.
-  // Purely additive alongside create()/join() above.
-  quickmatchJoin: (token: string) =>
-    postJson<QuickMatchStatus>("/api/match/quickmatch/join", { token }),
-  quickmatchStatus: (token: string) =>
-    getJson<QuickMatchStatus>(`/api/match/quickmatch/status?token=${encodeURIComponent(token)}`),
-  quickmatchLeave: (token: string) =>
-    postJson<{ left: boolean }>("/api/match/quickmatch/leave", { token }),
 
   // Generic seat-scoped action call — server derives role from the token,
   // ignoring anything the client puts under `role` in payload.

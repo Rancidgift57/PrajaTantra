@@ -12,6 +12,11 @@ authoritarian construction powers that override the city's own zoning laws.
 It's part SimCity, part corruption-investigation game, part election
 simulator — played head-to-head in real time over WebSockets.
 
+> 🗺️ **Want 3–5 cities, cross-city money laundering, staggered elections and
+> a Command Center war room instead of one city?** See the
+> [Multi-City Campaign expansion](./MULTICITY_CAMPAIGN.md) — a separate,
+> additive layer on top of everything below.
+
 ---
 
 ## Table of Contents

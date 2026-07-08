@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import CommandCenter from "@/components/CommandCenter";
+import CampaignTutorialModal, { CAMPAIGN_TUTORIAL_SEEN_KEY } from "@/components/CampaignTutorialModal";
 import { CampaignState, campaignApi } from "@/lib/campaignApi";
 
 function randomPlayerId() {
@@ -15,6 +16,19 @@ export default function CampaignPage() {
   const [campaign, setCampaign] = useState<CampaignState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // Auto-open the campaign tutorial the very first time a player reaches
+  // this page; afterwards it only opens via the sidebar's "How This Works".
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem(CAMPAIGN_TUTORIAL_SEEN_KEY)) {
+        setShowTutorial(true);
+      }
+    } catch {
+      // ignore storage errors (private browsing etc.)
+    }
+  }, []);
 
   async function handleCreate() {
     setBusy(true);
@@ -43,7 +57,12 @@ export default function CampaignPage() {
   }
 
   if (campaign) {
-    return <CommandCenter campaignId={campaign.campaign_id} playerId={playerId} />;
+    return (
+      <>
+        <CommandCenter campaignId={campaign.campaign_id} playerId={playerId} onOpenTutorial={() => setShowTutorial(true)} />
+        {showTutorial && <CampaignTutorialModal onClose={() => setShowTutorial(false)} />}
+      </>
+    );
   }
 
   return (
@@ -51,7 +70,18 @@ export default function CampaignPage() {
       className="mx-auto mt-16 max-w-md p-6"
       style={{ border: "1px solid var(--pt-line)", background: "var(--pt-panel)", color: "var(--pt-white)" }}
     >
-      <div className="mb-1 font-black text-lg">Multi-City Campaign</div>
+      {showTutorial && <CampaignTutorialModal onClose={() => setShowTutorial(false)} />}
+      <div className="mb-1 flex items-center justify-between">
+        <div className="font-black text-lg">Multi-City Campaign</div>
+        <button
+          type="button"
+          onClick={() => setShowTutorial(true)}
+          className="text-[10px] underline"
+          style={{ color: "var(--pt-wheel-lt)" }}
+        >
+          📖 How This Works
+        </button>
+      </div>
       <div className="mb-5 text-[11px]" style={{ color: "var(--pt-muted)" }}>
         Start a 4-city campaign (Phase 1: Bengaluru · Phase 2: Mumbai + Chennai · Phase 3: Delhi), or join one with a
         code. Roles flip city-to-city — Incumbent somewhere means Opposition somewhere else.

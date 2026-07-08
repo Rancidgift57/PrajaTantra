@@ -22,11 +22,12 @@ type Props = {
   campaignId: string;
   playerId: string;
   pollMs?: number;
+  onOpenTutorial?: () => void;
 };
 
 const POLL_DEFAULT = 5000;
 
-export default function CommandCenter({ campaignId, playerId, pollMs = POLL_DEFAULT }: Props) {
+export default function CommandCenter({ campaignId, playerId, pollMs = POLL_DEFAULT, onOpenTutorial }: Props) {
   const [state, setState] = useState<CampaignState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,10 +82,24 @@ export default function CommandCenter({ campaignId, playerId, pollMs = POLL_DEFA
       {/* ── Global Map sidebar ── */}
       <aside className="w-72 shrink-0 border-r" style={{ borderColor: "var(--pt-line)", background: "var(--pt-panel)" }}>
         <div className="border-b p-3" style={{ borderColor: "var(--pt-line)" }}>
-          <div className="text-[10px] uppercase tracking-widest" style={{ color: "var(--pt-muted)" }}>
-            Global Map
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] uppercase tracking-widest" style={{ color: "var(--pt-muted)" }}>
+              Global Map
+            </div>
+            {onOpenTutorial && (
+              <button
+                type="button"
+                onClick={onOpenTutorial}
+                className="text-[10px] underline"
+                style={{ color: "var(--pt-wheel-lt)" }}
+              >
+                📖 How This Works
+              </button>
+            )}
           </div>
-          <div className="text-sm font-black">Phase {state.current_phase} / {state.total_phases}</div>
+          <div className="text-sm font-black">
+            Phase {state.current_phase} / {state.total_phases}
+          </div>
         </div>
 
         <div className="ledger-scroll overflow-y-auto" style={{ maxHeight: 460 }}>

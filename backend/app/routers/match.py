@@ -26,8 +26,6 @@ from app.schemas.match import (
     MatchActionEnvelope,
     MatchInfo,
     MatchStateResponse,
-    QuickMatchJoinRequest,
-    QuickMatchStatusResponse,
     SeatInfo,
 )
 from app.schemas.prajatantra import (
@@ -45,7 +43,6 @@ from app.schemas.prajatantra import (
 from app.services.auth_engine import auth_engine
 from app.services.connection_manager import connection_manager
 from app.services.match_registry import Match, match_registry
-from app.services.quickmatch_queue import quickmatch_queue
 from app.services.tactical_cards import CARD_CATALOG
 
 router = APIRouter(prefix="/api/match", tags=["match"])
@@ -110,68 +107,6 @@ async def join_match(payload: JoinMatchRequest) -> MatchInfo:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _broadcast_state(match)  # let the host know someone joined
     return _match_info(match, player_id)
-
-
-# ── Quick Match — auto-pairs two free players instead of sharing a join
-# code. Purely additive: /create and /join above are completely untouched
-# and remain the code-based flow. Poll /quickmatch/status after a "waiting"
-# response until it flips to "matched". ───────────────────────────────────
-
-@router.post("/quickmatch/join", response_model=QuickMatchStatusResponse)
-async def quickmatch_join(payload: QuickMatchJoinRequest) -> QuickMatchStatusResponse:
-    try:
-        profile = await auth_engine.me(payload.token)
-    except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-    # We might already be the "waiting" side of a pairing that happened
-    # since our last call — pick that up instead of re-queueing.
-    ready_match_id = quickmatch_queue.pop_ready(profile.id)
-    if ready_match_id:
-        match = match_registry.get_match(ready_match_id)
-        return QuickMatchStatusResponse(status="matched", match=_match_info(match, profile.id))
-
-    opponent = quickmatch_queue.find_opponent(profile.id, profile.username, profile.ideology, profile.political_mmr)
-    if opponent is None:
-        quickmatch_queue.add(profile.id, profile.username, profile.ideology, profile.political_mmr)
-        return QuickMatchStatusResponse(status="waiting", queue_size=quickmatch_queue.queue_size())
-
-    # Found a waiting opponent — stand up a real match the exact same way
-    # the code-based flow does (create_match + join_match, unmodified),
-    # we just skip the "share a code" step. Whoever waited longer becomes
-    # the host/Incumbent; the player who just triggered the pairing becomes
-    # Opposition.
-    match = match_registry.create_match(opponent.player_id, opponent.username)
-    match = match_registry.join_match(match.join_code, profile.id, profile.username)
-    quickmatch_queue.mark_ready(opponent.player_id, match.id)
-    await _broadcast_state(match)
-    return QuickMatchStatusResponse(status="matched", match=_match_info(match, profile.id))
-
-
-@router.get("/quickmatch/status", response_model=QuickMatchStatusResponse)
-async def quickmatch_status(token: str = Query(...)) -> QuickMatchStatusResponse:
-    try:
-        profile = await auth_engine.me(token)
-    except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-    ready_match_id = quickmatch_queue.pop_ready(profile.id)
-    if ready_match_id:
-        match = match_registry.get_match(ready_match_id)
-        return QuickMatchStatusResponse(status="matched", match=_match_info(match, profile.id))
-    if quickmatch_queue.is_waiting(profile.id):
-        return QuickMatchStatusResponse(status="waiting", queue_size=quickmatch_queue.queue_size())
-    return QuickMatchStatusResponse(status="idle")
-
-
-@router.post("/quickmatch/leave")
-async def quickmatch_leave(payload: QuickMatchJoinRequest) -> dict:
-    try:
-        profile = await auth_engine.me(payload.token)
-    except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    quickmatch_queue.remove(profile.id)
-    return {"left": True}
 
 
 @router.get("/{match_id}", response_model=MatchStateResponse)

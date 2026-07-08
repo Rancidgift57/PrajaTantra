@@ -7,8 +7,6 @@ instance, so two matches never see each other's city state.
 """
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel
 
 from app.schemas.prajatantra import PlayerRole, SovereignStateResponse
@@ -52,17 +50,3 @@ class MatchActionEnvelope(BaseModel):
 
     token: str
     payload: dict
-
-
-# ── Quick Match — auto-pairs two free players, as an alternative to the
-# join-code flow above. Purely additive: CreateMatchRequest/JoinMatchRequest
-# and everything else in this file are completely untouched. ──────────────
-
-class QuickMatchJoinRequest(BaseModel):
-    token: str  # auth token of the player entering the queue
-
-
-class QuickMatchStatusResponse(BaseModel):
-    status: Literal["matched", "waiting", "idle"]
-    match: MatchInfo | None = None
-    queue_size: int = 0
