@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MatchInfo, matchApi } from "@/lib/matchApi";
 
 type Props = {
@@ -8,12 +8,26 @@ type Props = {
   onMatched: (match: MatchInfo) => void;
 };
 
+const QUICKMATCH_POLL_MS = 2000;
+
 export default function MatchLobby({ token, onMatched }: Props) {
-  const [mode, setMode] = useState<"idle" | "hosting" | "joining">("idle");
+  const [mode, setMode] = useState<"idle" | "hosting" | "joining" | "quickmatching">("idle");
   const [joinCode, setJoinCode] = useState("");
   const [hostedMatch, setHostedMatch] = useState<MatchInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [queueSize, setQueueSize] = useState(0);
+  const [queuedSeconds, setQueuedSeconds] = useState(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const secondsRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function stopQuickmatchTimers() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (secondsRef.current) { clearInterval(secondsRef.current); secondsRef.current = null; }
+  }
+
+  // Clean up any running poll/timer on unmount (e.g. navigating away while queued).
+  useEffect(() => () => stopQuickmatchTimers(), []);
 
   async function handleCreate() {
     setBusy(true);
@@ -44,6 +58,51 @@ export default function MatchLobby({ token, onMatched }: Props) {
     }
   }
 
+  // ── Quick Match — auto-pairs with a free player instead of a code ──────
+  async function handleQuickmatchStart() {
+    setBusy(true);
+    setError(null);
+    setQueuedSeconds(0);
+    try {
+      const result = await matchApi.quickmatchJoin(token);
+      if (result.status === "matched" && result.match) {
+        onMatched(result.match);
+        return;
+      }
+      // Still waiting — start polling for a pairing.
+      setMode("quickmatching");
+      setQueueSize(result.queue_size);
+      secondsRef.current = setInterval(() => setQueuedSeconds((s) => s + 1), 1000);
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await matchApi.quickmatchStatus(token);
+          if (status.status === "matched" && status.match) {
+            stopQuickmatchTimers();
+            onMatched(status.match);
+          } else {
+            setQueueSize(status.queue_size);
+          }
+        } catch {
+          // Transient network hiccup — the next poll tick will retry.
+        }
+      }, QUICKMATCH_POLL_MS);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Quick Match abhi available nahi hai.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleQuickmatchCancel() {
+    stopQuickmatchTimers();
+    setMode("idle");
+    try {
+      await matchApi.quickmatchLeave(token);
+    } catch {
+      // Best-effort — worst case the entry expires server-side on its own.
+    }
+  }
+
   return (
     <div
       className="mx-auto mt-16 max-w-md p-6"
@@ -63,25 +122,61 @@ export default function MatchLobby({ token, onMatched }: Props) {
         </div>
       )}
 
-      {mode !== "hosting" && (
-        <div className="mb-4 flex gap-2">
+      {mode === "idle" && (
+        <div className="mb-4 grid gap-2">
           <button
             type="button"
-            onClick={handleCreate}
+            onClick={handleQuickmatchStart}
             disabled={busy}
-            className="flex-1 px-3 py-2 text-xs font-bold uppercase"
-            style={{ background: "var(--pt-saffron)", color: "#fff" }}
+            className="px-3 py-3 text-xs font-black uppercase disabled:opacity-50"
+            style={{ background: "var(--pt-green)", color: "#fff" }}
           >
-            🏙️ Naya Match Banayein
+            ⚡ Quick Match — Free Khiladi Dhoondein
           </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={busy}
+              className="flex-1 px-3 py-2 text-xs font-bold uppercase disabled:opacity-50"
+              style={{ background: "var(--pt-saffron)", color: "#fff" }}
+            >
+              🏙️ Naya Match Banayein
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("joining")}
+              disabled={busy}
+              className="flex-1 px-3 py-2 text-xs font-bold uppercase disabled:opacity-50"
+              style={{ border: "1px solid var(--pt-line)", color: "var(--pt-muted)" }}
+            >
+              🔑 Code se Join Karein
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "quickmatching" && (
+        <div className="mb-4 p-4 text-center" style={{ border: "1px dashed var(--pt-green)" }}>
+          <div className="flex items-center justify-center gap-2">
+            <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--pt-green)" }} />
+            <div className="text-[10px] uppercase" style={{ color: "var(--pt-muted)" }}>
+              Khiladi dhoonda ja raha hai…
+            </div>
+          </div>
+          <div className="my-2 text-2xl font-black" style={{ color: "var(--pt-green)" }}>
+            {queuedSeconds}s
+          </div>
+          <div className="text-[10px]" style={{ color: "var(--pt-muted)" }}>
+            {queueSize > 0 ? `${queueSize} khiladi queue mein` : "Koi doosra khiladi milte hi match shuru ho jayega."}
+          </div>
           <button
             type="button"
-            onClick={() => setMode("joining")}
-            disabled={busy}
-            className="flex-1 px-3 py-2 text-xs font-bold uppercase"
+            onClick={handleQuickmatchCancel}
+            className="mt-3 px-3 py-1.5 text-[11px] font-bold uppercase"
             style={{ border: "1px solid var(--pt-line)", color: "var(--pt-muted)" }}
           >
-            🔑 Code se Join Karein
+            Cancel
           </button>
         </div>
       )}
