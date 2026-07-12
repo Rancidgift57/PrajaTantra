@@ -2,32 +2,43 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MatchInfo, matchApi } from "@/lib/matchApi";
+import { CoalitionMatchInfo, coalitionApi } from "@/lib/coalitionApi";
 
 type Props = {
   token: string;
   onMatched: (match: MatchInfo) => void;
+  onCoalitionMatched: (match: CoalitionMatchInfo) => void;
 };
 
 const QUICKMATCH_POLL_MS = 2000;
 
-export default function MatchLobby({ token, onMatched }: Props) {
-  const [mode, setMode] = useState<"idle" | "hosting" | "joining" | "quickmatching">("idle");
+export default function MatchLobby({ token, onMatched, onCoalitionMatched }: Props) {
+  const [mode, setMode] = useState<"idle" | "hosting" | "joining" | "quickmatching" | "coalition-quickmatching">("idle");
   const [joinCode, setJoinCode] = useState("");
   const [hostedMatch, setHostedMatch] = useState<MatchInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [queueSize, setQueueSize] = useState(0);
   const [queuedSeconds, setQueuedSeconds] = useState(0);
+  const [coalitionQueueSize, setCoalitionQueueSize] = useState(0);
+  const [coalitionQueuedSeconds, setCoalitionQueuedSeconds] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const secondsRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const coalitionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const coalitionSecondsRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function stopQuickmatchTimers() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (secondsRef.current) { clearInterval(secondsRef.current); secondsRef.current = null; }
   }
 
+  function stopCoalitionQuickmatchTimers() {
+    if (coalitionPollRef.current) { clearInterval(coalitionPollRef.current); coalitionPollRef.current = null; }
+    if (coalitionSecondsRef.current) { clearInterval(coalitionSecondsRef.current); coalitionSecondsRef.current = null; }
+  }
+
   // Clean up any running poll/timer on unmount (e.g. navigating away while queued).
-  useEffect(() => () => stopQuickmatchTimers(), []);
+  useEffect(() => () => { stopQuickmatchTimers(); stopCoalitionQuickmatchTimers(); }, []);
 
   async function handleCreate() {
     setBusy(true);
@@ -103,6 +114,50 @@ export default function MatchLobby({ token, onMatched }: Props) {
     }
   }
 
+  // ── 5-Player Coalition Quick Match — groups 5 free players instead of 2 ──
+  async function handleCoalitionQuickmatchStart() {
+    setBusy(true);
+    setError(null);
+    setCoalitionQueuedSeconds(0);
+    try {
+      const result = await coalitionApi.quickmatchJoin(token);
+      if (result.status === "matched" && result.match) {
+        onCoalitionMatched(result.match);
+        return;
+      }
+      setMode("coalition-quickmatching");
+      setCoalitionQueueSize(result.queue_size);
+      coalitionSecondsRef.current = setInterval(() => setCoalitionQueuedSeconds((s) => s + 1), 1000);
+      coalitionPollRef.current = setInterval(async () => {
+        try {
+          const status = await coalitionApi.quickmatchStatus(token);
+          if (status.status === "matched" && status.match) {
+            stopCoalitionQuickmatchTimers();
+            onCoalitionMatched(status.match);
+          } else {
+            setCoalitionQueueSize(status.queue_size);
+          }
+        } catch {
+          // Transient network hiccup — the next poll tick will retry.
+        }
+      }, QUICKMATCH_POLL_MS);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "5-Player Coalition abhi available nahi hai.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCoalitionQuickmatchCancel() {
+    stopCoalitionQuickmatchTimers();
+    setMode("idle");
+    try {
+      await coalitionApi.quickmatchLeave(token);
+    } catch {
+      // Best-effort — worst case the entry expires server-side on its own.
+    }
+  }
+
   return (
     <div
       className="mx-auto mt-16 max-w-md p-6"
@@ -132,6 +187,15 @@ export default function MatchLobby({ token, onMatched }: Props) {
             style={{ background: "var(--pt-green)", color: "#fff" }}
           >
             ⚡ Quick Match — Free Khiladi Dhoondein
+          </button>
+          <button
+            type="button"
+            onClick={handleCoalitionQuickmatchStart}
+            disabled={busy}
+            className="px-3 py-3 text-xs font-black uppercase disabled:opacity-50"
+            style={{ background: "var(--pt-gold)", color: "#0C0F14" }}
+          >
+            👥 5-Player Coalition — Quick Match
           </button>
           <div className="flex gap-2">
             <button
@@ -173,6 +237,33 @@ export default function MatchLobby({ token, onMatched }: Props) {
           <button
             type="button"
             onClick={handleQuickmatchCancel}
+            className="mt-3 px-3 py-1.5 text-[11px] font-bold uppercase"
+            style={{ border: "1px solid var(--pt-line)", color: "var(--pt-muted)" }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {mode === "coalition-quickmatching" && (
+        <div className="mb-4 p-4 text-center" style={{ border: "1px dashed var(--pt-gold)" }}>
+          <div className="flex items-center justify-center gap-2">
+            <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--pt-gold)" }} />
+            <div className="text-[10px] uppercase" style={{ color: "var(--pt-muted)" }}>
+              5-Player Assembly ke liye khiladi dhoonda ja raha hai…
+            </div>
+          </div>
+          <div className="my-2 text-2xl font-black" style={{ color: "var(--pt-gold)" }}>
+            {coalitionQueuedSeconds}s
+          </div>
+          <div className="text-[10px]" style={{ color: "var(--pt-muted)" }}>
+            {coalitionQueueSize > 0
+              ? `${coalitionQueueSize}/5 khiladi queue mein`
+              : "5 khiladi milte hi Assembly ban jayegi — 101 seats, koi majority nahi."}
+          </div>
+          <button
+            type="button"
+            onClick={handleCoalitionQuickmatchCancel}
             className="mt-3 px-3 py-1.5 text-[11px] font-bold uppercase"
             style={{ border: "1px solid var(--pt-line)", color: "var(--pt-muted)" }}
           >

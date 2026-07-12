@@ -30,12 +30,14 @@ import CityDevelopment from "@/components/CityDevelopment";
 import CityMap from "@/components/CityMap";
 import Leaderboard from "@/components/Leaderboard";
 import MatchLobby from "@/components/MatchLobby";
+import CoalitionRoom from "@/components/CoalitionRoom";
 import LiveEventFeed from "@/components/LiveEventFeed";
 import SeatMap from "@/components/SeatMap";
 import StreakBadge, { recordMatchResult } from "@/components/StreakBadge";
 import TutorialModal, { TUTORIAL_SEEN_KEY } from "@/components/TutorialModal";
 
 import { matchApi, MatchInfo } from "@/lib/matchApi";
+import { CoalitionMatchInfo } from "@/lib/coalitionApi";
 import { useMatchSocket } from "@/lib/useMatchSocket";
 import { createMatchDevClient } from "@/lib/matchApiAdapter";
 
@@ -2109,11 +2111,13 @@ function messageFromError(error: unknown, fallback: string) {
 // reconnects to the same match instead of dropping back to the lobby.
 const SESSION_KEY = "prajatantra.session.v1";
 const MATCH_KEY = "prajatantra.match_id.v1";
+const COALITION_MATCH_KEY = "prajatantra.coalition_match_id.v1";
 
 export default function Home() {
   const [session, setSession] = useState<AuthResponse | null>(null);
   const [bootChecked, setBootChecked] = useState(false);
   const [matchId, setMatchId] = useState<string | null>(null);
+  const [coalitionMatchId, setCoalitionMatchId] = useState<string | null>(null);
 
   // Restore session on mount
   useEffect(() => {
@@ -2176,9 +2180,19 @@ export default function Home() {
     window.localStorage.setItem(MATCH_KEY, match.match_id);
   }
 
+  function handleCoalitionMatched(match: CoalitionMatchInfo) {
+    setCoalitionMatchId(match.match_id);
+    window.localStorage.setItem(COALITION_MATCH_KEY, match.match_id);
+  }
+
   function handleLeaveMatch() {
     setMatchId(null);
     window.localStorage.removeItem(MATCH_KEY);
+  }
+
+  function handleLeaveCoalitionMatch() {
+    setCoalitionMatchId(null);
+    window.localStorage.removeItem(COALITION_MATCH_KEY);
   }
 
   if (!bootChecked) {
@@ -2196,11 +2210,22 @@ export default function Home() {
     return <AuthGate onAuth={handleAuth} />;
   }
 
+  if (coalitionMatchId) {
+    return (
+      <CoalitionRoom
+        matchId={coalitionMatchId}
+        token={session.token}
+        myPlayerId={session.player.id}
+        onLeave={handleLeaveCoalitionMatch}
+      />
+    );
+  }
+
   if (!matchId) {
     return (
       <main className="min-h-screen" style={{ background: "var(--pt-ink)", color: "var(--pt-white)" }}>
         <div className="tricolour-bar" />
-        <MatchLobby token={session.token} onMatched={handleMatched} />
+        <MatchLobby token={session.token} onMatched={handleMatched} onCoalitionMatched={handleCoalitionMatched} />
       </main>
     );
   }
