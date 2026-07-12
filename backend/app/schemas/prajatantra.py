@@ -510,7 +510,7 @@ class TenRoundSimulationResponse(BaseModel):
     # SovereignEngine.run_election's `result.incumbent_seats` access below
     # crashed with AttributeError on every single election.) -------------
     election_cycle_days: int = 3
-    counting_duration_hours: int = 2
+    counting_duration_hours: int = 1
     total_rounds: int = 24
     total_seats: int = 101
     incumbent_seats: int = 0
@@ -577,7 +577,7 @@ class RunElectionResponse(BaseModel):
 
     # -- Election-day scheduling (flavour + UI countdowns) -------------------
     election_cycle_days: int = Field(default=3, description="Polling day recurs every N in-game days.")
-    counting_duration_hours: int = Field(default=2, description="Live counting window length in hours.")
+    counting_duration_hours: int = Field(default=1, description="Live counting window length in hours.")
     total_rounds: int = Field(default=24, description="Number of counting rounds within the window.")
 
     # -- Seat map (hemicycle chart) ------------------------------------------

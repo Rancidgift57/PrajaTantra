@@ -50,7 +50,11 @@ from app.schemas.prajatantra import (
 )
 
 ELECTION_CYCLE_DAYS = 3
-COUNTING_DURATION_HOURS = 2
+# Counting window: 24 rounds announced in batches of 4 every 10 real-time
+# minutes (6 batches x 10min = 60min = 1hr), so the result reveals like a
+# real election-night broadcast instead of dumping the final tally at once.
+# See frontend/src/components/ElectionRoundsAnnouncer.tsx for the reveal pacing.
+COUNTING_DURATION_HOURS = 1
 COUNTING_ROUNDS = 24
 
 INDEPENDENT_SEAT_SHARE = 0.03  # small fringe/independent bloc, never contested
