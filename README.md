@@ -17,6 +17,11 @@ simulator — played head-to-head in real time over WebSockets.
 > [Multi-City Campaign expansion](./MULTICITY_CAMPAIGN.md) — a separate,
 > additive layer on top of everything below.
 
+> 🏛️ **Want 5 players instead of 2 — coalition negotiation, backstabbing,
+> floor tests, and a live election-night results broadcast?** See
+> [The Coalition Era expansion](./COALITION_ERA.md) — same backend, same
+> frontend, one new "👥 5-Player Coalition" button in the lobby.
+
 ---
 
 ## Table of Contents
