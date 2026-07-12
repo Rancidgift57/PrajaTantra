@@ -37,7 +37,7 @@ import StreakBadge, { recordMatchResult } from "@/components/StreakBadge";
 import TutorialModal, { TUTORIAL_SEEN_KEY } from "@/components/TutorialModal";
 
 import { matchApi, MatchInfo } from "@/lib/matchApi";
-import { CoalitionMatchInfo } from "@/lib/coalitionApi";
+import { CoalitionMatchInfo, coalitionApi } from "@/lib/coalitionApi";
 import { useMatchSocket } from "@/lib/useMatchSocket";
 import { createMatchDevClient } from "@/lib/matchApiAdapter";
 
@@ -2121,39 +2121,69 @@ export default function Home() {
 
   // Restore session on mount
   useEffect(() => {
-    let savedToken: string | null = null;
-    try {
-      const raw = window.localStorage.getItem(SESSION_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as AuthResponse;
-        savedToken = parsed.token;
-        setSession(parsed);
-        // Validate token is still accepted by the backend; if not, clear it.
-        api.me(parsed.token).catch(() => {
-          window.localStorage.removeItem(SESSION_KEY);
-          setSession(null);
-        });
+    let cancelled = false;
+
+    async function boot() {
+      let savedToken: string | null = null;
+      try {
+        const raw = window.localStorage.getItem(SESSION_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as AuthResponse;
+          savedToken = parsed.token;
+          if (!cancelled) setSession(parsed);
+          // Validate token is still accepted by the backend; if not, clear it.
+          try {
+            await api.me(parsed.token);
+          } catch {
+            window.localStorage.removeItem(SESSION_KEY);
+            if (!cancelled) setSession(null);
+            savedToken = null;
+          }
+        }
+      } catch {
+        window.localStorage.removeItem(SESSION_KEY);
       }
-    } catch {
-      window.localStorage.removeItem(SESSION_KEY);
+
+      // Matches live in server memory only — a backend restart/redeploy (or,
+      // on a free-tier host, just the server sleeping and waking back up)
+      // wipes them. NEVER trust a saved match_id without a *validated* token:
+      // restoring it optimistically mounts the Dashboard, which immediately
+      // opens a WebSocket to a match that no longer exists — the server
+      // rejects the handshake instantly, surfacing as a confusing
+      // "WebSocket closed before the connection was established" with no
+      // useful error for the player. Only restore once we know both the
+      // session AND the match are still good.
+      const savedMatch = window.localStorage.getItem(MATCH_KEY);
+      if (savedMatch && savedToken) {
+        try {
+          await matchApi.getState(savedMatch, savedToken);
+          if (!cancelled) setMatchId(savedMatch);
+        } catch {
+          window.localStorage.removeItem(MATCH_KEY);
+        }
+      } else if (savedMatch) {
+        // No valid session to check the match against — drop it rather than
+        // restoring blind. It'll simply need a fresh Quick Match / join.
+        window.localStorage.removeItem(MATCH_KEY);
+      }
+
+      const savedCoalitionMatch = window.localStorage.getItem(COALITION_MATCH_KEY);
+      if (savedCoalitionMatch && savedToken) {
+        try {
+          await coalitionApi.getState(savedCoalitionMatch, savedToken);
+          if (!cancelled) setCoalitionMatchId(savedCoalitionMatch);
+        } catch {
+          window.localStorage.removeItem(COALITION_MATCH_KEY);
+        }
+      } else if (savedCoalitionMatch) {
+        window.localStorage.removeItem(COALITION_MATCH_KEY);
+      }
+
+      if (!cancelled) setBootChecked(true);
     }
 
-    // Matches live in server memory only — a backend restart/redeploy wipes
-    // them. If the saved match_id no longer exists server-side, drop back
-    // to the lobby instead of endlessly retrying a WebSocket that will
-    // always be rejected pre-handshake (surfaces as a confusing 403).
-    const savedMatch = window.localStorage.getItem(MATCH_KEY);
-    if (savedMatch && savedToken) {
-      matchApi.getState(savedMatch, savedToken)
-        .then(() => setMatchId(savedMatch))
-        .catch(() => window.localStorage.removeItem(MATCH_KEY));
-    } else if (savedMatch) {
-      // No session to validate against (yet) — keep it optimistically;
-      // it'll be re-checked once login resolves on a future mount.
-      setMatchId(savedMatch);
-    }
-
-    setBootChecked(true);
+    boot();
+    return () => { cancelled = true; };
   }, []);
 
   function handleAuth(response: AuthResponse) {

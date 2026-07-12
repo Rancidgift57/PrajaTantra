@@ -220,11 +220,14 @@ export default function CoalitionRoom({
             {match.log.length === 0 ? (
               <span style={{ color: "var(--pt-muted)" }}>Koi ghatna nahi.</span>
             ) : (
-              [...match.log].reverse().map((entry, i) => (
-                <div key={i} className="px-2 py-1" style={{ borderLeft: "3px solid var(--pt-saffron)", background: "var(--pt-ink)" }}>
-                  {entry}
-                </div>
-              ))
+              match.log
+                .map((entry, originalIndex) => ({ entry, originalIndex }))
+                .reverse()
+                .map(({ entry, originalIndex }) => (
+                  <div key={originalIndex} className="px-2 py-1" style={{ borderLeft: "3px solid var(--pt-saffron)", background: "var(--pt-ink)" }}>
+                    {entry}
+                  </div>
+                ))
             )}
           </div>
         </div>
