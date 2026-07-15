@@ -8,7 +8,7 @@ negotiation window forms a Ruling Coalition vs an Opposition Bloc, the CM
 allocates ministries and decides how much black money to cut partners in on,
 any player can call a Floor Test once an hour, and a betrayed partner can
 withdraw support to collapse the government instantly. The game closes with
-a round-by-round (24-round / 1hr) final election where War Chests buy seats.
+a round-by-round (24-round / 40min) final election where War Chests buy seats.
 
 Completely additive: does not import or mutate match_registry.py,
 sovereign_engine.py, or anything from the 2-player game.
@@ -40,8 +40,11 @@ FLOOR_TEST_COOLDOWN_SECONDS = 60 * 60          # "once every real-time hour"
 FLOOR_TEST_VOTE_WINDOW_SECONDS = 90
 ELECTION_TOTAL_ROUNDS = 24
 ELECTION_BATCH_SIZE = 4                        # revealed together
-ELECTION_BATCH_INTERVAL_SECONDS = 10 * 60      # every 10 real-time minutes
-ELECTION_DURATION_SECONDS = (ELECTION_TOTAL_ROUNDS // ELECTION_BATCH_SIZE) * ELECTION_BATCH_INTERVAL_SECONDS  # 1hr
+# 40 real-time minutes total: 24 rounds / 4-per-batch = 6 batches,
+# 2400s / 6 = 400s (6m40s) between batches. Mirrored exactly in
+# frontend/src/components/ElectionRoundsAnnouncer.tsx — keep both in sync.
+ELECTION_DURATION_SECONDS = 40 * 60
+ELECTION_BATCH_INTERVAL_SECONDS = ELECTION_DURATION_SECONDS // (ELECTION_TOTAL_ROUNDS // ELECTION_BATCH_SIZE)
 STARTING_TREASURY = 15_000_000
 
 
@@ -330,7 +333,7 @@ class CoalitionEngine:
             match.negotiation_deadline = time.time() + NEGOTIATION_WINDOW_SECONDS
             match._log("⏰ Negotiation window expired with no government formed — window reopened.")
 
-    # ── Final election: round-by-round reveal over 1hr (24 rounds) ──────
+    # ── Final election: round-by-round reveal over 40min (24 rounds) ────
     def start_election(self, match: CoalitionMatch) -> None:
         match.election_started_at = time.time()
         match.status = "election"
@@ -399,7 +402,7 @@ class CoalitionEngine:
             incumbent_name=match.seats[anchor_id].username,
             opposition_name="Opposition Bloc",
             election_cycle_days=0,
-            counting_duration_hours=1,
+            counting_duration_hours=1,  # legacy display flavor; real pacing is ELECTION_DURATION_SECONDS (40min)
             total_rounds=ELECTION_TOTAL_ROUNDS,
             total_seats=TOTAL_SEATS,
             incumbent_seats=final_seats.get(anchor_id, 0),
@@ -408,8 +411,8 @@ class CoalitionEngine:
             seats=seat_blocs,
         )
         match._log(
-            f"🗳️ 2029 Election called! Counting runs 1hr in 24 rounds "
-            f"(4 rounds revealed every 10 minutes). War Chests are buying ward multipliers now."
+            f"🗳️ 2029 Election called! Counting runs 40 minutes across 24 rounds "
+            f"(4 rounds revealed every ~6m40s). War Chests are buying ward multipliers now."
         )
 
     def election_reveal_state(self, match: CoalitionMatch) -> dict:

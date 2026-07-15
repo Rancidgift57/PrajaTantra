@@ -273,6 +273,16 @@ class SovereignStateResponse(BaseModel):
         description="A Flash Crisis currently awaiting a response (60s window), if any.",
     )
     card_availability: list[CardAvailability] = Field(default_factory=list)
+    # Forward-referenced (TenRoundSimulationResponse is declared further
+    # down this file) — resolved via SovereignStateResponse.model_rebuild()
+    # at the bottom of the module. Broadcasting the last election result as
+    # part of every WS state push means BOTH players — not just whoever
+    # clicked "Hold Election" — see the same live, round-by-round reveal
+    # paced off the same counting_started_at timestamp.
+    last_election_result: "TenRoundSimulationResponse | None" = Field(
+        default=None,
+        description="The most recent election's round-by-round result, if one has been held this match.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +530,11 @@ class TenRoundSimulationResponse(BaseModel):
     emergency_eligible: bool = False
     emergency_threshold_pct: float = 80.0
     emergency_message: str | None = None
+    # Unix-seconds timestamp set by the server the instant counting starts.
+    # Both players pace their round-by-round reveal off THIS shared value
+    # (not their own local click time), so the "when will the result be
+    # announced" countdown agrees for everyone watching the same election.
+    counting_started_at: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -594,3 +609,11 @@ class RunElectionResponse(BaseModel):
     )
     emergency_threshold_pct: float = 80.0
     emergency_message: str | None = None
+
+# ---------------------------------------------------------------------------
+# SovereignStateResponse.last_election_result is declared as a forward-ref
+# string ("TenRoundSimulationResponse | None") because TenRoundSimulationResponse
+# is defined further up this file, before that class exists. Rebuild here,
+# once every class in the module has been created, so pydantic can resolve it.
+# ---------------------------------------------------------------------------
+SovereignStateResponse.model_rebuild()

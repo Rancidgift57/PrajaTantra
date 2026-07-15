@@ -5,9 +5,13 @@ import { Radio, Trophy } from "lucide-react";
 
 const TOTAL_ROUNDS = 24;
 const BATCH_SIZE = 4;
-const BATCH_INTERVAL_SECONDS = 10 * 60; // 10 real-time minutes
 const TOTAL_BATCHES = TOTAL_ROUNDS / BATCH_SIZE; // 6
-const TOTAL_DURATION_SECONDS = TOTAL_BATCHES * BATCH_INTERVAL_SECONDS; // 1hr
+// 40 real-time minutes total, split evenly across the 6 batches
+// (~6m40s each). Mirrored exactly in backend/app/services/coalition_engine.py
+// (ELECTION_DURATION_SECONDS) and backend/app/services/incumbency_engine.py
+// (COUNTING_DURATION_SECONDS) — keep all three in sync if this ever changes.
+const TOTAL_DURATION_SECONDS = 40 * 60;
+const BATCH_INTERVAL_SECONDS = TOTAL_DURATION_SECONDS / TOTAL_BATCHES;
 
 export type AnnouncerRound = {
   round: number;
@@ -20,9 +24,10 @@ export type AnnouncerParty = { name: string; color: string; finalSeats: number }
 /**
  * Paces the reveal of a precomputed round-by-round result over real time,
  * instead of dumping the final tally the instant the simulation resolves —
- * "look like election result announcement": 4 rounds every 10 real minutes.
- * startedAt is a unix-seconds timestamp shared with the server so every
- * viewer's clock agrees, regardless of when their own tab loaded.
+ * "look like election result announcement": 4 rounds every ~6m40s, 40
+ * minutes total. startedAt is a unix-seconds timestamp shared with the
+ * server so every viewer's clock — and countdown to the final result —
+ * agrees, regardless of when their own tab loaded.
  */
 export default function ElectionRoundsAnnouncer({
   startedAt,
@@ -47,6 +52,8 @@ export default function ElectionRoundsAnnouncer({
   const roundsRevealed = Math.min(TOTAL_ROUNDS, batchesRevealed * BATCH_SIZE);
   const complete = elapsed >= TOTAL_DURATION_SECONDS;
   const secondsToNextBatch = Math.max(0, BATCH_INTERVAL_SECONDS - (elapsed % BATCH_INTERVAL_SECONDS));
+  const secondsToFinalResult = Math.max(0, TOTAL_DURATION_SECONDS - elapsed);
+  const finalResultAt = new Date((startedAt + TOTAL_DURATION_SECONDS) * 1000);
   const currentRound = rounds[Math.min(roundsRevealed, rounds.length) - 1] ?? rounds[0];
   const totalFinalSeats = parties.reduce((s, p) => s + p.finalSeats, 0) || 1;
 
@@ -54,6 +61,10 @@ export default function ElectionRoundsAnnouncer({
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  function fmtWallClock(date: Date) {
+    return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   }
 
   return (
@@ -70,9 +81,16 @@ export default function ElectionRoundsAnnouncer({
 
       <div className="p-3">
         {!complete && (
-          <div className="mb-3 flex items-center justify-between text-[11px]" style={{ color: "var(--pt-muted)" }}>
-            <span>Next 4 rounds announced in</span>
-            <span className="font-black" style={{ color: "var(--pt-gold)" }}>{fmtClock(secondsToNextBatch)}</span>
+          <div className="mb-3 text-center" style={{ borderBottom: "1px dashed var(--pt-line)", paddingBottom: "10px" }}>
+            <div className="text-[10px] uppercase" style={{ color: "var(--pt-muted)" }}>
+              Result Announced In
+            </div>
+            <div className="text-3xl font-black tabular-nums" style={{ color: "var(--pt-gold)" }}>
+              {fmtClock(secondsToFinalResult)}
+            </div>
+            <div className="text-[10px]" style={{ color: "var(--pt-muted)" }}>
+              Full result declared ~{fmtWallClock(finalResultAt)} · next 4 rounds in {fmtClock(secondsToNextBatch)}
+            </div>
           </div>
         )}
 

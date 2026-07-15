@@ -7,9 +7,15 @@ sweeps across all 24 counting rounds during an election.
 Election-day timing (flavour + UI countdowns)
 -----------------------------------------------
   - Polling day recurs every 3 in-game days (ELECTION_CYCLE_DAYS).
-  - Vote counting is a live 2-hour window (COUNTING_DURATION_HOURS)
-    split into 24 rounds (COUNTING_ROUNDS): rounds 1-6 are postal/rural
-    ballots, 7-18 are urban centres, 19-24 are volatile swing zones.
+  - Vote counting is now a live 40-minute window (COUNTING_DURATION_SECONDS,
+    real time) split into 24 rounds (COUNTING_ROUNDS) revealed in batches of
+    4 (COUNTING_BATCH_SIZE): rounds 1-6 are postal/rural ballots, 7-18 are
+    urban centres, 19-24 are volatile swing zones. counting_started_at is
+    stamped on the result and broadcast to both players via
+    SovereignState.last_election_result, so ElectionRoundsAnnouncer.tsx
+    paces the same countdown for everyone watching, not just whoever
+    clicked "Hold Election". COUNTING_DURATION_HOURS is legacy
+    display-only flavor text kept for older UI strings.
 
 Formula
 -------
@@ -38,6 +44,7 @@ Seats
 """
 
 import random
+import time
 from dataclasses import dataclass
 
 from app.schemas.prajatantra import (
@@ -50,12 +57,18 @@ from app.schemas.prajatantra import (
 )
 
 ELECTION_CYCLE_DAYS = 3
-# Counting window: 24 rounds announced in batches of 4 every 10 real-time
-# minutes (6 batches x 10min = 60min = 1hr), so the result reveals like a
-# real election-night broadcast instead of dumping the final tally at once.
-# See frontend/src/components/ElectionRoundsAnnouncer.tsx for the reveal pacing.
+# Counting window: 24 rounds announced in batches of 4, paced over 40 real
+# minutes total (6 batches x ~6m40s = 2400s = 40min), so the result reveals
+# like a real election-night broadcast instead of dumping the final tally
+# at once. COUNTING_DURATION_HOURS is legacy display-only flavor text (kept
+# as a rounded hour figure for older UI strings); the real, second-accurate
+# pacing lives in COUNTING_DURATION_SECONDS and is mirrored exactly in
+# frontend/src/components/ElectionRoundsAnnouncer.tsx and
+# backend/app/services/coalition_engine.py — keep all three in sync.
 COUNTING_DURATION_HOURS = 1
 COUNTING_ROUNDS = 24
+COUNTING_BATCH_SIZE = 4
+COUNTING_DURATION_SECONDS = 40 * 60
 
 INDEPENDENT_SEAT_SHARE = 0.03  # small fringe/independent bloc, never contested
 EMERGENCY_THRESHOLD_PCT = 80.0
@@ -272,6 +285,7 @@ class IncumbencyEngine:
             margin_pct=margin_pct,
             incumbent_name=payload.incumbent_name,
             opposition_name=payload.opposition_name,
+            counting_started_at=time.time(),
             election_cycle_days=ELECTION_CYCLE_DAYS,
             counting_duration_hours=COUNTING_DURATION_HOURS,
             total_rounds=COUNTING_ROUNDS,

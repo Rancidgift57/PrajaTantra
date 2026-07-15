@@ -27,6 +27,7 @@ from app.schemas.prajatantra import (
     SovereignStateResponse,
     StrikeRequest,
     StrikeResponse,
+    TenRoundSimulationResponse,
     TradeDuelRequest,
     TradeDuelResponse,
     Ward,
@@ -84,6 +85,11 @@ class SovereignMemory:
     # Epoch seconds of the last election held in this match; None = never
     # held one yet, so the very first election is always available.
     last_election_at: float | None = None
+    # The most recent counting result, kept around so `state()` can embed
+    # it in every WS broadcast — both players pace the same live,
+    # round-by-round reveal off its counting_started_at timestamp, not just
+    # whoever happened to click "Hold Election".
+    last_election_result: TenRoundSimulationResponse | None = None
     # One-shot consumable set by the Incumbent's Media Distraction card;
     # halves the very next leak's trust damage, then resets to 1.0.
     leak_damage_multiplier_next: float = 1.0
@@ -168,6 +174,7 @@ class SovereignEngine:
             seat_projection=project_seats(self.memory.city, self.memory.blocks, self.memory.incumbent, self.memory.opposition),
             active_crisis=self.memory.active_crisis,
             card_availability=self._card_availability(),
+            last_election_result=self.memory.last_election_result,
         )
 
     def _unfreeze_expired_blocks(self) -> None:
@@ -354,6 +361,7 @@ class SovereignEngine:
 
         result = incumbency_engine.simulate_ten_rounds(payload)
         self.memory.last_election_at = time.time()
+        self.memory.last_election_result = result
 
         if was_early:
             self.memory.city.public_trust = self._clamp(self.memory.city.public_trust - 5)

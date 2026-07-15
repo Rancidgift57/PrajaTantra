@@ -31,6 +31,7 @@ import CityMap from "@/components/CityMap";
 import Leaderboard from "@/components/Leaderboard";
 import MatchLobby from "@/components/MatchLobby";
 import CoalitionRoom from "@/components/CoalitionRoom";
+import ElectionRoundsAnnouncer from "@/components/ElectionRoundsAnnouncer";
 import LiveEventFeed from "@/components/LiveEventFeed";
 import SeatMap from "@/components/SeatMap";
 import StreakBadge, { recordMatchResult } from "@/components/StreakBadge";
@@ -916,6 +917,7 @@ function Dashboard({
             speech={speech}
             election={election}
             simulation={simulation}
+            sharedElectionResult={state?.last_election_result ?? null}
             consecutiveTerms={consecutiveTerms}
             busy={busyAction === "election"}
             busyEmergency={busyAction === "emergency"}
@@ -1503,7 +1505,7 @@ function TacticalCardDeck({
 
 // ─── Election Panel — चुनाव अभियान (with 24-Round Simulation + Seat Map) ──
 function ElectionPanel({
-  manifesto, speech, election, simulation,
+  manifesto, speech, election, simulation, sharedElectionResult,
   consecutiveTerms,
   busy, busyEmergency, emergencyActive, role,
   electionAvailable, earlyElectionAvailable, cooldownSecondsRemaining,
@@ -1515,6 +1517,12 @@ function ElectionPanel({
   speech: string;
   election: ElectionResponse | null;
   simulation: TenRoundSimulationResponse | null;
+  // The last election result as broadcast to BOTH players over the match
+  // WebSocket (SovereignState.last_election_result) — used instead of the
+  // caller-local `simulation` for the live round-by-round reveal, so
+  // whoever DIDN'T click "Hold Election" still sees the same paced
+  // countdown rather than nothing at all until it's fully resolved.
+  sharedElectionResult: TenRoundSimulationResponse | null;
   consecutiveTerms: number;
   busy: boolean;
   busyEmergency: boolean;
@@ -1529,6 +1537,11 @@ function ElectionPanel({
   onCallEarly: () => void;
   onDeclareEmergency: () => void;
 }) {
+  // Prefer the server-synced shared result (has counting_started_at, and is
+  // visible to both players); fall back to the caller-local `simulation`
+  // for anything the shared broadcast doesn't cover yet.
+  const displayResult = sharedElectionResult ?? simulation;
+
   // Read the derived scores echoed back in the simulation result
   const incScore = simulation
     ? Math.round((simulation.final_incumbent_votes / (simulation.final_incumbent_votes + simulation.final_opposition_votes)) * 100)
@@ -1553,7 +1566,7 @@ function ElectionPanel({
       <div className="mb-3 flex items-center gap-2 text-[10px]" style={{ color: "var(--pt-muted)" }}>
         <Radio className="h-3 w-3 opacity-60" />
         Chunaav har {simulation?.election_cycle_days ?? 3} din par hota hai · Matganak{" "}
-        {simulation?.counting_duration_hours ?? 2} ghante, {simulation?.total_rounds ?? 24} rounds mein.
+        40 minute, {simulation?.total_rounds ?? 24} rounds mein.
       </div>
 
       {/* ── Election cooldown status ─────────────────────────────── */}
@@ -1695,17 +1708,32 @@ function ElectionPanel({
         </button>
       )}
 
-      {/* ── 24-Round SVG Chart ─────────────────────────────────── */}
-      <TenRoundChart simulation={simulation} />
+      {/* ── 24-Round reveal: live-paced (both players, synced off the
+           server's counting_started_at) when available, otherwise the
+           static full-result chart (e.g. legacy results without a
+           timestamp) ─────────────────────────────────────────────── */}
+      {displayResult?.counting_started_at ? (
+        <ElectionRoundsAnnouncer
+          startedAt={displayResult.counting_started_at}
+          rounds={displayResult.rounds}
+          winnerName={displayResult.winner}
+          parties={[
+            { name: displayResult.incumbent_name || "Sattadheen Dal", color: "#FF9933", finalSeats: displayResult.incumbent_seats },
+            { name: displayResult.opposition_name || "Vipaksh Dal", color: "#138808", finalSeats: displayResult.opposition_seats },
+          ]}
+        />
+      ) : (
+        <TenRoundChart simulation={simulation} />
+      )}
 
       {/* ── Seat map (hemicycle chart) ──────────────────────────── */}
-      {simulation && (simulation.seats?.length ?? 0) > 0 && (
+      {displayResult && (displayResult.seats?.length ?? 0) > 0 && (
         <SeatMap
-          key={`${simulation.total_seats}-${simulation.incumbent_seats}-${simulation.opposition_seats}-${simulation.margin}`}
-          seats={simulation.seats}
-          totalSeats={simulation.total_seats ?? 101}
-          incumbentName={simulation.incumbent_name ?? "Sattadheen Dal"}
-          oppositionName={simulation.opposition_name ?? "Vipaksh Dal"}
+          key={`${displayResult.total_seats}-${displayResult.incumbent_seats}-${displayResult.opposition_seats}-${displayResult.margin}`}
+          seats={displayResult.seats}
+          totalSeats={displayResult.total_seats ?? 101}
+          incumbentName={displayResult.incumbent_name ?? "Sattadheen Dal"}
+          oppositionName={displayResult.opposition_name ?? "Vipaksh Dal"}
         />
       )}
 

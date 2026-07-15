@@ -148,6 +148,10 @@ export type SovereignState = {
   seat_projection: SeatProjection;
   active_crisis: CrisisEvent | null;
   card_availability: CardAvailability[];
+  // The last election's round-by-round result, broadcast to BOTH players
+  // so everyone sees the same live, paced reveal — not just whoever
+  // clicked "Hold Election".
+  last_election_result: TenRoundSimulationResponse | null;
 };
 
 export type ConstructionResponse = {
@@ -260,6 +264,10 @@ export type TenRoundSimulationResponse = {
   emergency_eligible: boolean;
   emergency_threshold_pct: number;
   emergency_message: string | null;
+
+  // Unix-seconds timestamp the server started counting — both players pace
+  // the live round-by-round reveal off this shared value.
+  counting_started_at: number | null;
 };
 
 export type EmergencyRequest = {
